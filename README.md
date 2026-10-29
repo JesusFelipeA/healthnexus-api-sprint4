@@ -51,7 +51,7 @@ Comandos de uso diario:
 |---|---|
 | Ver registros de la API | `docker compose logs -f api` |
 | Pruebas automáticas | `docker compose exec api npm test` |
-| Crear usuarios de prueba por rol | `docker compose exec api node scripts/crear-usuarios-qa.js` |
+| Crear usuarios de prueba por rol (clave `Qa-Hospital-2026!`; el médico recibe el PIN `2468`) | `docker compose exec api node scripts/crear-usuarios-qa.js` |
 | Apagar conservando los datos | `docker compose down` |
 | Rehacer la base desde cero | `docker compose down -v` y de nuevo `up` |
 | Reconstruir tras cambiar `package.json` o el `Dockerfile` | `docker compose up --build -d` |

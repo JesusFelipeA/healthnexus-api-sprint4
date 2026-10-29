@@ -132,6 +132,8 @@ Un 403 por rol queda en `audit_logs` como `acceso_denegado` (con método y ruta,
 | GET | /cuentas/:id | administrador | cuentas, cuenta_items, pagos (cargos, pagos con cancelados marcados y `verificacion` del saldo; cada consulta queda en `audit_logs` como `consulta_sensible`) |
 | GET | /pagos/:id/recibo | administrador | pagos, cuentas, pacientes (PDF `application/pdf`, queda en `audit_logs` como `recibo_descargado`) |
 | POST | /emergencias | médico, enfermería | alertas (máx. 3 por minuto por usuario; `ubicacion` opcional `{lat,lng}`; envía push a médicos y enfermería) |
+| GET | /emergencias/activas | médico, enfermería | emergencias abiertas (`activa` o `vista`) de las últimas 24 h, con quién la activó, hora y ubicación |
+| PATCH | /emergencias/:id/atender | médico, enfermería | marca la emergencia como resuelta (`resuelta_por`, `resuelta_en`) y la registra en la bitácora |
 | POST | /notificaciones/token | todos (con `X-Device-Fingerprint`) | dispositivos (`{ token }`: guarda el token FCM del dispositivo; 404 si el dispositivo no existe o está bloqueado) |
 | DELETE | /notificaciones/token | todos (con `X-Device-Fingerprint`) | dispositivos (borra el token al cerrar sesión) |
 | GET | /farmacia/resumen | farmacia | medicamentos, lotes |

@@ -135,6 +135,48 @@ test('CP-32: más de 3 activaciones por minuto del mismo usuario responden 429',
   assert.equal(estados[3], 429);
 });
 
+// ---- Emergencias activas (Dashboard) ---------------------------------------------
+test('emergencia: va dirigida a todo el personal (user_id NULL) y guarda quién la activó', async () => {
+  respuestas = [{ si: /INSERT INTO alertas/, devuelve: [{ insertId: 91 }] }];
+  await pedir('POST', '/emergencias', { id: 2, body: {} });
+  const ins = llamadas.find((c) => /INSERT INTO alertas/.test(c.sql));
+  assert.match(ins.sql, /'activa', NULL/);
+  assert.ok(ins.params.includes('App\\Models\\User'));
+  assert.ok(ins.params.includes(2));
+  assert.equal(JSON.parse(ins.params[1]).activadaPorId, 2);
+});
+
+test('emergencias activas: farmacia recibe 403; médico y enfermería ven quién, cuándo y dónde', async () => {
+  assert.equal((await pedir('GET', '/emergencias/activas', { id: 3 })).status, 403);
+  respuestas = [{ si: /FROM alertas/, devuelve: [[
+    { id: 7, mensaje: 'Código azul', estado: 'activa', creada: '2026-10-28 21:00:00', datos: '{"activadaPor":"Enf. Ana","activadaPorId":2,"ubicacion":{"lat":19.28,"lng":-99.65}}' },
+    { id: 6, mensaje: 'Código de emergencia activado', estado: 'vista', creada: '2026-10-28 20:00:00', datos: { activadaPor: 'Dr. Luis' } },
+  ]] }];
+  const r = await pedir('GET', '/emergencias/activas', { id: 2 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json[0], { id: 7, mensaje: 'Código azul', estado: 'activa', creada: '2026-10-28 21:00:00', activadaPor: 'Enf. Ana', activadaPorId: 2, ubicacion: { lat: 19.28, lng: -99.65 } });
+  assert.equal(r.json[1].ubicacion, null);
+  const sel = llamadas.find((c) => /FROM alertas/.test(c.sql));
+  assert.match(sel.sql, /estado IN \('activa','vista'\)/);
+  assert.match(sel.sql, /INTERVAL 24 HOUR/);
+});
+
+test('atender emergencia: valida el id, responde 404 si ya estaba atendida y deja registro', async () => {
+  assert.equal((await pedir('PATCH', '/emergencias/abc/atender', { id: 1 })).status, 400);
+  assert.equal((await pedir('PATCH', '/emergencias/7/atender', { id: 3 })).status, 403);
+  respuestas = [{ si: /UPDATE alertas/, devuelve: [{ affectedRows: 0 }] }];
+  assert.equal((await pedir('PATCH', '/emergencias/7/atender', { id: 1 })).status, 404);
+  llamadas.length = 0;
+  respuestas = [{ si: /UPDATE alertas/, devuelve: [{ affectedRows: 1 }] }];
+  const r = await pedir('PATCH', '/emergencias/7/atender', { id: 1 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { id: 7, estado: 'resuelta' });
+  const up = llamadas.find((c) => /UPDATE alertas/.test(c.sql));
+  assert.deepEqual(up.params, [1, 7]);
+  const audit = llamadas.find((c) => /INSERT INTO audit_logs/.test(c.sql));
+  assert.ok(audit.params.includes('emergencia_atendida'));
+});
+
 // ---- CP-30: hospitales y derivación externa -----------------------------------
 test('CP-30: coordenadas fuera de rango o incompletas responden 400', async () => {
   assert.equal((await pedir('GET', '/hospitals?lat=999&lng=0', { id: 1 })).status, 400);

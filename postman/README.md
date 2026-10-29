@@ -1,6 +1,6 @@
 # Pruebas de la API con Postman
 
-Colección con 38 peticiones y 103 comprobaciones, en 7 carpetas: salud, autenticación y roles (HU-37, CP-33, CP-34), pacientes y triage (HU-38), emergencias (HU-39, CP-32), hospitales (HU-41, CP-30), farmacia (HU-42), y cuentas y auditoría (HU-73). Cada petición comprueba además que la respuesta tarde menos de 3 segundos (CP-38).
+Colección con 47 peticiones y 128 comprobaciones, en 8 carpetas: salud, autenticación y roles (HU-37, CP-33, CP-34), pacientes y triage (HU-38), emergencias (HU-39, CP-32), hospitales (HU-41, CP-30), farmacia (HU-42), cuentas y auditoría (HU-73), y signos vitales (HU-40, Actividad 18). Cada petición comprueba además que la respuesta tarde menos de 3 segundos (CP-38).
 
 > **Solo local o QA.** La colección crea pacientes ficticios y activa una emergencia (que envía notificaciones push). Si `baseUrl` apunta a producción, no envía nada y marca la prueba como fallida.
 

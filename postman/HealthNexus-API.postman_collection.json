@@ -1,0 +1,1885 @@
+{
+  "info": {
+    "name": "HealthNexus API · Pruebas Sprint 4",
+    "_postman_id": "b6f1e1f0-4d1a-4c3e-9e2a-healthnexus-s4",
+    "description": "Casos de prueba de la API REST de HealthNexus (Sprint 4), ordenados para ejecutarse de principio a fin.\n\n**Solo para el ambiente local o de QA.** La colección crea pacientes y activa emergencias (que envían notificaciones push), así que se detiene si `baseUrl` apunta a producción.\n\nRequisitos: API local con Docker y los usuarios de prueba (`docker compose exec api node scripts/crear-usuarios-qa.js`).\nTodas las peticiones comprueban además que la respuesta tarde menos de 3 segundos (CP-38).\n\nLímites de la API a tener en cuenta: el login acepta 20 intentos fallidos por IP cada 15 minutos (cada ejecución usa 3) y cada usuario puede activar 3 emergencias por minuto (cada ejecución usa 1 por usuario).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Protección: esta colección crea pacientes y emergencias. Nunca contra producción.",
+          "const base = pm.variables.get('baseUrl') || '';",
+          "if (/duckdns\\.org|amazonaws\\.com/i.test(base)) {",
+          "  pm.test('Ambiente permitido: esta colección no se ejecuta contra producción (' + base + ')', () => pm.expect.fail('Usa el ambiente local o de QA'));",
+          "  pm.execution.skipRequest();",
+          "}",
+          "// Huella de dispositivo estable durante la ejecución (la API la exige en el login)",
+          "if (!pm.collectionVariables.get('huella')) {",
+          "  pm.collectionVariables.set('huella', 'postman-' + pm.variables.replaceIn('{{$guid}}'));",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Responde en menos de 3 s (CP-38)', () => pm.expect(pm.response.responseTime).to.be.below(3000));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "huella",
+      "value": ""
+    },
+    {
+      "key": "tokenEnf",
+      "value": ""
+    },
+    {
+      "key": "tokenMed",
+      "value": ""
+    },
+    {
+      "key": "tokenAdm",
+      "value": ""
+    },
+    {
+      "key": "tokenFar",
+      "value": ""
+    },
+    {
+      "key": "pinToken",
+      "value": ""
+    },
+    {
+      "key": "tokenAlterado",
+      "value": ""
+    },
+    {
+      "key": "pacienteId",
+      "value": ""
+    },
+    {
+      "key": "emergenciaId",
+      "value": ""
+    },
+    {
+      "key": "telefono",
+      "value": ""
+    },
+    {
+      "key": "pinIncorrecto",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "00 · Salud",
+      "description": "La API y la base de datos responden.",
+      "item": [
+        {
+          "name": "API disponible",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve ok: true', () => pm.expect(pm.response.json().ok).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 · Autenticación y roles (HU-37 · CP-33 · CP-34)",
+      "description": "Login con huella de dispositivo, PIN del médico y control de acceso por rol.",
+      "item": [
+        {
+          "name": "Login sin huella de dispositivo → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "La huella se revisa antes que la contraseña: sin ella no se revela si las credenciales eran correctas.",
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoEnfermeria}}\",\n  \"password\": \"{{claveQa}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Código HUELLA_REQUERIDA', () => pm.expect(pm.response.json().code).to.eql('HUELLA_REQUERIDA'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Credenciales incorrectas → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"no-existe-{{$timestamp}}@healthnexus.test\",\n  \"password\": \"clave-incorrecta\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));",
+                  "pm.test('No entrega token', () => pm.expect(pm.response.json().token).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login enfermería → token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoEnfermeria}}\",\n  \"password\": \"{{claveQa}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Rol enfermería', () => pm.expect(r.user.rol).to.eql('enfermeria'));",
+                  "pm.test('Entrega token', () => pm.expect(r.token).to.be.a('string'));",
+                  "pm.collectionVariables.set('tokenEnf', r.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login administrador → token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoAdmin}}\",\n  \"password\": \"{{claveQa}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Rol administrador', () => pm.expect(r.user.rol).to.eql('administrador'));",
+                  "pm.collectionVariables.set('tokenAdm', r.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login farmacia → token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoFarmacia}}\",\n  \"password\": \"{{claveQa}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Rol farmacia', () => pm.expect(r.user.rol).to.eql('farmacia'));",
+                  "pm.collectionVariables.set('tokenFar', r.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login médico (paso 1) → pide PIN",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoMedico}}\",\n  \"password\": \"{{claveQa}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Pide PIN y aún no entrega token', () => { pm.expect(r.requierePin).to.eql(true); pm.expect(r.token).to.be.undefined; });",
+                  "pm.collectionVariables.set('pinToken', r.pinToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PIN incorrecto → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/pin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "pin"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pinToken\": \"{{pinToken}}\",\n  \"pin\": \"{{pinIncorrecto}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('pinIncorrecto', pm.variables.get('pinMedico') === '0000' ? '1111' : '0000');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PIN correcto (paso 2) → token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Device-Fingerprint",
+                "value": "{{huella}}"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/pin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "pin"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pinToken\": \"{{pinToken}}\",\n  \"pin\": \"{{pinMedico}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test('Rol médico', () => pm.expect(r.user.rol).to.eql('medico'));",
+                  "pm.collectionVariables.set('tokenMed', r.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Perfil de la sesión (/auth/me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve el rol de la sesión', () => pm.expect(pm.response.json().rol).to.eql('enfermeria'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin token → 401 (CP-34)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token alterado → 401 (CP-34)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAlterado}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.collectionVariables.get('tokenEnf'); pm.collectionVariables.set('tokenAlterado', t.slice(0, -4) + (t.slice(-4) === 'AAAA' ? 'BBBB' : 'AAAA'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "pinToken usado como token de acceso → 401 (CP-34)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{pinToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Farmacia consulta pacientes → 403 (CP-33)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenFar}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 · Pacientes y triage (HU-38)",
+      "description": "Alta con validaciones, búsqueda, filtro por nivel y triage solo para el médico. Usa datos ficticios.",
+      "item": [
+        {
+          "name": "Alta de paciente ficticio → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Prueba\",\n  \"apellidoPaterno\": \"Postman\",\n  \"apellidoMaterno\": \"Ficticio\",\n  \"fechaNacimiento\": \"1990-05-12\",\n  \"sexo\": \"mujer\",\n  \"telefonoPrincipal\": \"{{telefono}}\",\n  \"correoElectronico\": \"postman.{{$timestamp}}@example.com\",\n  \"tipoSanguineo\": \"O+\",\n  \"alergias\": \"Ninguna\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('telefono', '55' + String(Math.floor(Math.random() * 1e8)).padStart(8, '0'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test('Devuelve el id y el teléfono de 10 dígitos', () => { pm.expect(r.id).to.be.a('number'); pm.expect(r.telefonoPrincipal).to.have.length(10); });",
+                  "pm.collectionVariables.set('pacienteId', r.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Teléfono de 8 dígitos → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "La API rechaza teléfonos que no tengan 10 dígitos (relacionado con DEF-01 de la web).",
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Prueba\",\n  \"apellidoPaterno\": \"Postman\",\n  \"fechaNacimiento\": \"1990-05-12\",\n  \"sexo\": \"mujer\",\n  \"telefonoPrincipal\": \"27365345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Mensaje de 10 dígitos', () => pm.expect(pm.response.json().error).to.include('10 dígitos'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CURP de 17 caracteres → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Prueba\",\n  \"apellidoPaterno\": \"Postman\",\n  \"fechaNacimiento\": \"1990-05-12\",\n  \"sexo\": \"mujer\",\n  \"curp\": \"POPF900512MMCSRC0\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Mensaje de CURP inválida', () => pm.expect(pm.response.json().error).to.include('CURP'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Menor de edad sin responsable → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Prueba\",\n  \"apellidoPaterno\": \"Postman\",\n  \"fechaNacimiento\": \"2016-03-01\",\n  \"sexo\": \"hombre\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Pide el responsable', () => pm.expect(pm.response.json().error).to.include('responsable'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buscar el paciente creado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients?q=Postman",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Postman"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Aparece en la búsqueda', () => pm.expect(pm.response.json().map((p) => p.id)).to.include(Number(pm.collectionVariables.get('pacienteId'))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Filtro con nivel inválido → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients?nivel=morado",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ],
+              "query": [
+                {
+                  "key": "nivel",
+                  "value": "morado"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Enfermería cambia el triage → 403",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Solo el médico (y el administrador) cambia el nivel de triage.",
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{pacienteId}}/triage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{pacienteId}}",
+                "triage"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"triageLevel\": \"amarillo\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Médico clasifica en amarillo → 200",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients/{{pacienteId}}/triage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients",
+                "{{pacienteId}}",
+                "triage"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"triageLevel\": \"amarillo\",\n  \"motivo\": \"Dolor abdominal de prueba\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Queda en amarillo', () => pm.expect(pm.response.json().triageLevel).to.eql('amarillo'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Filtro por nivel amarillo incluye al paciente",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/patients?nivel=amarillo&q=Postman",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "patients"
+              ],
+              "query": [
+                {
+                  "key": "nivel",
+                  "value": "amarillo"
+                },
+                {
+                  "key": "q",
+                  "value": "Postman"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const p = pm.response.json().find((x) => x.id === Number(pm.collectionVariables.get('pacienteId')));",
+                  "pm.test('El paciente aparece con nivel amarillo', () => { pm.expect(p).to.be.an('object'); pm.expect(p.triageLevel).to.eql('amarillo'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 · Emergencias (HU-39 · CP-32)",
+      "description": "Activar, consultar y atender un código de emergencia. En local, la activación envía una notificación push a los teléfonos con sesión de médico o enfermería.",
+      "item": [
+        {
+          "name": "Farmacia activa emergencia → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenFar}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ubicación fuera de rango → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ubicacion\": {\n    \"lat\": 999,\n    \"lng\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Enfermería activa emergencia → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mensaje\": \"Prueba de Postman: código de emergencia\",\n  \"ubicacion\": {\n    \"lat\": 19.2826,\n    \"lng\": -99.6557\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test('Queda activa con número de registro', () => { pm.expect(r.estado).to.eql('activa'); pm.expect(r.id).to.be.a('number'); });",
+                  "pm.collectionVariables.set('emergenciaId', r.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Emergencias activas incluyen la nueva",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias/activas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias",
+                "activas"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const e = pm.response.json().find((x) => x.id === Number(pm.collectionVariables.get('emergenciaId')));",
+                  "pm.test('Aparece con quién la activó y la ubicación', () => {",
+                  "  pm.expect(e).to.be.an('object');",
+                  "  pm.expect(e.activadaPor).to.be.a('string');",
+                  "  pm.expect(e.ubicacion.lat).to.be.closeTo(19.2826, 0.0001);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Médico atiende la emergencia → 200",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias/{{emergenciaId}}/atender",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias",
+                "{{emergenciaId}}",
+                "atender"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Queda resuelta', () => pm.expect(pm.response.json().estado).to.eql('resuelta'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Atender otra vez → 404",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias/{{emergenciaId}}/atender",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias",
+                "{{emergenciaId}}",
+                "atender"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ya no aparece en activas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias/activas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias",
+                "activas"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('La emergencia atendida ya no está', () => pm.expect(pm.response.json().map((x) => x.id)).to.not.include(Number(pm.collectionVariables.get('emergenciaId'))));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 · Hospitales (HU-41 · CP-30)",
+      "description": "Búsqueda de hospitales cercanos por GPS.",
+      "item": [
+        {
+          "name": "Coordenadas fuera de rango → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/hospitals?lat=999&lng=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hospitals"
+              ],
+              "query": [
+                {
+                  "key": "lat",
+                  "value": "999"
+                },
+                {
+                  "key": "lng",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hospitales cercanos a Toluca, del más cercano al más lejano",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/hospitals?lat=19.2826&lng=-99.6557",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "hospitals"
+              ],
+              "query": [
+                {
+                  "key": "lat",
+                  "value": "19.2826"
+                },
+                {
+                  "key": "lng",
+                  "value": "-99.6557"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().map((h) => h.distanciaKm);",
+                  "pm.test('Devuelve una lista', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "pm.test('Ordenados por distancia', () => pm.expect(d).to.eql([...d].sort((a, b) => a - b)));",
+                  "pm.test('Dentro de 50 km', () => d.forEach((x) => pm.expect(x).to.be.at.most(50)));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 · Farmacia (HU-42)",
+      "description": "El resumen de farmacia es solo para su rol.",
+      "item": [
+        {
+          "name": "Resumen como farmacia → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenFar}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/farmacia/resumen",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "farmacia",
+                "resumen"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Trae los indicadores', () => pm.expect(pm.response.json()).to.include.keys('totalMedicamentos', 'stockBajo', 'sinStock', 'lotesPorCaducar', 'lotesCaducados'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resumen como enfermería → 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/farmacia/resumen",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "farmacia",
+                "resumen"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 · Cuentas y auditoría (HU-73 · HU-37)",
+      "description": "Estado de cuenta y bitácora: solo administrador.",
+      "item": [
+        {
+          "name": "Cuentas como administrador → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdm}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cuentas?limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cuentas"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Trae total, saldo pendiente y datos', () => pm.expect(pm.response.json()).to.include.keys('total', 'saldoPendiente', 'data'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cuentas como médico → 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cuentas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cuentas"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bitácora como administrador → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdm}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auditoria?limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auditoria"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Trae registros', () => pm.expect(pm.response.json().data).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bitácora como enfermería → 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auditoria",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auditoria"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

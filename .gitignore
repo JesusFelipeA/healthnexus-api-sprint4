@@ -1,4 +1,16 @@
-﻿node_modules/
+node_modules
 .env
-logs/
-*.log
+.env.*
+!.env.example
+!.env.*.example
+
+# Respaldos de bases de datos (contienen datos reales)
+respaldo*.sql
+*.dump.sql
+database/initdb/01-laravel.sql
+*.anterior
+
+# Credenciales de Firebase (cuenta de servicio)
+*firebase-adminsdk*.json
+cuenta-de-servicio*.json
+secrets/

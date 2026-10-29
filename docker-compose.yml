@@ -1,34 +1,38 @@
+# Desarrollo: API con recarga automática + MySQL con el esquema inicial.
+#   cp .env.docker.example .env.docker && docker compose up --build
 services:
   db:
     image: mysql:8.0
-    container_name: healthnexus-db
-    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${DB_NAME}
-      MYSQL_USER: ${DB_USER}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: root_dev_pass
+      MYSQL_DATABASE: healthnexusdb
+      MYSQL_USER: hn_app
+      MYSQL_PASSWORD: hn_dev_pass
     ports:
-      - "3307:3306"
+      - "3307:3306"   # solo desarrollo: para MySQL Workbench
     volumes:
       - db_data:/var/lib/mysql
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/initdb/01-laravel.sql:/docker-entrypoint-initdb.d/01-laravel.sql:ro
+      - ./database/extra.sql:/docker-entrypoint-initdb.d/02-extra.sql:ro
+      - ./database/indices_rendimiento.sql:/docker-entrypoint-initdb.d/03-indices.sql:ro
+      - ./database/push.sql:/docker-entrypoint-initdb.d/04-push.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot_dev_pass --silent"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
 
   api:
-    build: .
-    container_name: healthnexus-api
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      DB_HOST: db
-      DB_PORT: 3306
+    build:
+      context: .
+      target: dev
+    env_file: .env.docker
     ports:
       - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules   # conserva las dependencias de la imagen
     depends_on:
       db:
         condition: service_healthy

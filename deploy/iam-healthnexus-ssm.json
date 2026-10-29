@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LeerSecretosDeProduccion",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParametersByPath", "ssm:GetParameters", "ssm:GetParameter"],
+      "Resource": [
+        "arn:aws:ssm:us-east-2:TU_ID_DE_CUENTA:parameter/healthnexus/prod",
+        "arn:aws:ssm:us-east-2:TU_ID_DE_CUENTA:parameter/healthnexus/prod/*"
+      ]
+    },
+    {
+      "Sid": "DescifrarConLaLlaveDeSSM",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "kms:ViaService": "ssm.us-east-2.amazonaws.com" } }
+    }
+  ]
+}

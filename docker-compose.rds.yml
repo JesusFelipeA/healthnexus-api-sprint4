@@ -1,0 +1,36 @@
+# Producción con la base en Amazon RDS (la misma que usa la plataforma web).
+# Solo levanta la API: no hay contenedor de MySQL.
+#   docker compose -f docker-compose.rds.yml --env-file .env.rds up -d --build
+# La API escucha solo en 127.0.0.1:3000; Nginx del servidor es la entrada HTTPS.
+services:
+  api:
+    build:
+      context: .
+      target: prod
+    image: healthnexus-api:${TAG:-latest}
+    container_name: healthnexus-api
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      DB_HOST: ${DB_HOST:?Falta DB_HOST (endpoint de RDS) en .env.rds}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_NAME: ${DB_NAME:?Falta DB_NAME}
+      DB_USER: ${DB_USER:?Falta DB_USER}
+      DB_PASS: ${DB_PASS:?Falta DB_PASS}
+      JWT_SECRET: ${JWT_SECRET:?Falta JWT_SECRET}
+      JWT_EXPIRES: ${JWT_EXPIRES:-8h}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-120}
+      # Notificaciones push (opcional): cuenta de servicio de Firebase en base64
+      FIREBASE_CREDENTIALS_BASE64: ${FIREBASE_CREDENTIALS_BASE64:-}
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 384m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

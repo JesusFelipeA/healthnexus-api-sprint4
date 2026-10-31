@@ -8,6 +8,7 @@ const PROD_OK = {
   DB_HOST: 'hn.xxxx.us-east-2.rds.amazonaws.com', DB_NAME: 'healthnexusdb', DB_USER: 'hn_api', DB_PASS: 'f0e1d2c3b4a59687',
   TRUST_PROXY: '1', CORS_ORIGINS: 'https://healthnexus.duckdns.org',
   FIREBASE_CREDENTIALS_BASE64: 'e30=',
+  SMTP_HOST: 'smtp.gmail.com',
 };
 
 test('entorno: producción con secretos fuertes arranca sin errores ni avisos', () => {
@@ -41,4 +42,11 @@ test('entorno: sin credenciales de Firebase solo hay un aviso: las notificacione
 test('entorno: en desarrollo basta con tener JWT_SECRET (aunque sea de ejemplo)', () => {
   assert.deepEqual(revisarEntorno({ JWT_SECRET: 'clave_solo_para_desarrollo_cambiala' }).errores, []);
   assert.match(revisarEntorno({}).errores[0], /Falta JWT_SECRET/);
+});
+
+test('entorno: en producción sin SMTP_HOST hay un aviso (la recuperación de contraseña no envía correos), no un error', () => {
+  const r = revisarEntorno({ ...PROD_OK, SMTP_HOST: '' });
+  assert.deepEqual(r.errores, []);
+  assert.equal(r.avisos.length, 1);
+  assert.match(r.avisos[0], /SMTP_HOST/);
 });

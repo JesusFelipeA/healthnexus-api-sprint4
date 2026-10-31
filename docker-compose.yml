@@ -17,6 +17,7 @@ services:
       - ./database/extra.sql:/docker-entrypoint-initdb.d/02-extra.sql:ro
       - ./database/indices_rendimiento.sql:/docker-entrypoint-initdb.d/03-indices.sql:ro
       - ./database/push.sql:/docker-entrypoint-initdb.d/04-push.sql:ro
+      - ./database/recuperacion.sql:/docker-entrypoint-initdb.d/05-recuperacion.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot_dev_pass --silent"]
       interval: 5s

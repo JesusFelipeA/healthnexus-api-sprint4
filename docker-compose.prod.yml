@@ -44,6 +44,13 @@ services:
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-120}
       # Notificaciones push (opcional): cuenta de servicio de Firebase en base64
       FIREBASE_CREDENTIALS_BASE64: ${FIREBASE_CREDENTIALS_BASE64:-}
+      # Recuperación de contraseña por correo (opcional; sin SMTP_HOST no se envían correos)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-0}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:-}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

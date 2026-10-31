@@ -26,6 +26,7 @@ function revisarEntorno(env = process.env) {
     }
     if (String(env.TRUST_PROXY || '0') === '0') avisos.push('TRUST_PROXY=0 detrás de Nginx: todos los usuarios compartirán la IP del proxy. Usa TRUST_PROXY=1.');
     if (!env.FIREBASE_CREDENTIALS_FILE && !env.FIREBASE_CREDENTIALS_BASE64) avisos.push('Sin FIREBASE_CREDENTIALS_FILE ni FIREBASE_CREDENTIALS_BASE64: las notificaciones push están desactivadas.');
+    if (!env.SMTP_HOST) avisos.push('Sin SMTP_HOST: la recuperación de contraseña desde la app no enviará correos.');
     if (!env.CORS_ORIGINS) avisos.push('CORS_ORIGINS está vacío: ningún navegador podrá llamar a la API (la app móvil no se ve afectada).');
   }
   return { errores, avisos, ambiente: prod ? 'producción' : (env.NODE_ENV || 'desarrollo') };

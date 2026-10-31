@@ -9,6 +9,32 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+const sqlSesion = (revocacion) => `
+  SELECT u.id, u.name, u.activo, r.name AS rol${revocacion ? ', sr.desde_epoch' : ''}
+  FROM users u
+  LEFT JOIN model_has_roles mr ON mr.model_id = u.id AND mr.model_type LIKE '%User'
+  LEFT JOIN roles r ON r.id = mr.role_id${revocacion ? '\n  LEFT JOIN sesiones_revocadas sr ON sr.user_id = u.id' : ''}
+  WHERE u.id = ? LIMIT 1`;
+const conRevocacion = sqlSesion(true);
+const sinRevocacion = sqlSesion(false);
+let hayTablaRevocacion = true;
+
+// Si aún no se aplicó database/recuperacion.sql la API sigue funcionando (solo sin cierre de sesiones).
+async function usuarioDeSesion(id) {
+  if (hayTablaRevocacion) {
+    try {
+      const [rows] = await pool.query(conRevocacion, [id]);
+      return rows[0];
+    } catch (e) {
+      if (e.code !== 'ER_NO_SUCH_TABLE') throw e;
+      hayTablaRevocacion = false;
+      console.warn('AVISO: falta la tabla sesiones_revocadas (database/recuperacion.sql). El cambio de contraseña no cerrará sesiones.');
+    }
+  }
+  const [rows] = await pool.query(sinRevocacion, [id]);
+  return rows[0];
+}
+
 // Verifica el JWT y confirma en la base de datos que la cuenta siga activa.
 // El rol se lee de la BD en cada petición (no del token): si desactivan la cuenta
 // o le cambian el rol, el cambio surte efecto al instante.
@@ -22,16 +48,14 @@ async function auth(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
-  if (payload.etapa) return res.status(401).json({ error: 'Token inválido o expirado' }); // un pinToken no es token de acceso
+  if (payload.etapa) return res.status(401).json({ error: 'Token inválido o expirado' }); // un pinToken o resetToken no es token de acceso
   try {
-    const [rows] = await pool.query(
-      `SELECT u.id, u.name, u.activo, r.name AS rol
-       FROM users u
-       LEFT JOIN model_has_roles mr ON mr.model_id = u.id AND mr.model_type LIKE '%User'
-       LEFT JOIN roles r ON r.id = mr.role_id
-       WHERE u.id = ? LIMIT 1`, [payload.id]);
-    const u = rows[0];
+    const u = await usuarioDeSesion(payload.id);
     if (!u || u.activo !== 1) return res.status(401).json({ error: 'Sesión no válida' });
+    // Tras restablecer la contraseña, los tokens emitidos antes dejan de servir (database/recuperacion.sql)
+    if (u.desde_epoch && Number(payload.iat || 0) < Number(u.desde_epoch)) {
+      return res.status(401).json({ error: 'Tu sesión se cerró porque cambiaste la contraseña. Inicia sesión de nuevo.', code: 'SESION_REVOCADA' });
+    }
     req.user = { id: u.id, nombre: u.name, rol: u.rol || 'sin_rol' };
     next();
   } catch (e) {

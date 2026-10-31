@@ -31,6 +31,7 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+app.use('/api/auth/recuperar', require('./routes/recuperacion')); // recuperar contraseña con código por correo
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api', require('./routes/patients'));        // /stats y /patients
 app.use('/api', require('./routes/triage'));          // /triage y /patients/:id/triage

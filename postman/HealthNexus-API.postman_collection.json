@@ -2,7 +2,7 @@
   "info": {
     "name": "HealthNexus API · Pruebas Sprint 4",
     "_postman_id": "b6f1e1f0-4d1a-4c3e-9e2a-healthnexus-s4",
-    "description": "Casos de prueba de la API REST de HealthNexus (Sprint 4), ordenados para ejecutarse de principio a fin.\n\n**Solo para el ambiente local o de QA.** La colección crea pacientes y activa emergencias (que envían notificaciones push), así que se detiene si `baseUrl` apunta a producción.\n\nRequisitos: API local con Docker y los usuarios de prueba (`docker compose exec api node scripts/crear-usuarios-qa.js`).\nTodas las peticiones comprueban además que la respuesta tarde menos de 3 segundos (CP-38).\n\nLímites de la API a tener en cuenta: el login acepta 20 intentos fallidos por IP cada 15 minutos (cada ejecución usa 3) y cada usuario puede activar 3 emergencias por minuto (cada ejecución usa 1 por usuario).",
+    "description": "Casos de prueba de la API REST de HealthNexus (Sprint 4), ordenados para ejecutarse de principio a fin.\n\n**Solo para el ambiente local o de QA.** La colección crea pacientes y activa emergencias (que envían notificaciones push), así que se detiene si `baseUrl` apunta a producción.\n\nRequisitos: API local con Docker y los usuarios de prueba (`docker compose exec api node scripts/crear-usuarios-qa.js`).\nTodas las peticiones comprueban además que la respuesta tarde menos de 3 segundos (CP-38).\n\nLímites de la API a tener en cuenta: el login acepta 20 intentos fallidos por IP cada 15 minutos (cada ejecución usa 3), cada usuario puede activar 3 emergencias por minuto (cada ejecución usa 1 por usuario) y se pueden pedir 10 códigos de recuperación por IP cada 15 minutos (cada ejecución usa 2).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -80,6 +80,14 @@
     },
     {
       "key": "pinIncorrecto",
+      "value": ""
+    },
+    {
+      "key": "signoId",
+      "value": ""
+    },
+    {
+      "key": "signosAntes",
       "value": ""
     }
   ],
@@ -1309,6 +1317,57 @@
           ]
         },
         {
+          "name": "Ubicación incompleta (sin longitud) → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenAdm}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/emergencias",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "emergencias"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ubicacion\": {\n    \"lat\": 19.28\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Enfermería activa emergencia → 201",
           "request": {
             "method": "POST",
@@ -1874,6 +1933,709 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 · Signos vitales (HU-40 · Actividad 18)",
+      "description": "Sincronización de signos vitales: consulta, registro, nueva consulta, información incompleta y autorización. Usa el paciente ficticio de la carpeta 02.",
+      "item": [
+        {
+          "name": "Consulta de signos del paciente (antes)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos?pacienteId={{pacienteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ],
+              "query": [
+                {
+                  "key": "pacienteId",
+                  "value": "{{pacienteId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve una lista', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "pm.collectionVariables.set('signosAntes', pm.response.json().length);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Registro de signos vitales → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pacienteId\": \"{{pacienteId}}\",\n  \"temperatura\": 36.8,\n  \"frecuenciaCardiaca\": 80,\n  \"frecuenciaRespiratoria\": 18,\n  \"presionArterial\": \"120/80\",\n  \"saturacionOxigeno\": 97,\n  \"notas\": \"Registro de prueba (Postman)\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Devuelve el id del registro', () => pm.expect(pm.response.json().id).to.be.a('number'));",
+                  "pm.collectionVariables.set('signoId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Nueva consulta incluye el registro",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos?pacienteId={{pacienteId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ],
+              "query": [
+                {
+                  "key": "pacienteId",
+                  "value": "{{pacienteId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json().find((x) => x.id === Number(pm.collectionVariables.get('signoId')));",
+                  "pm.test('El registro aparece en el servicio remoto con sus valores', () => {",
+                  "  pm.expect(r).to.be.an('object');",
+                  "  pm.expect(Number(r.temperatura)).to.eql(36.8);",
+                  "  pm.expect(r.presion).to.eql('120/80');",
+                  "});",
+                  "pm.test('Hay un registro más que antes', () => pm.expect(pm.response.json().length).to.eql(Number(pm.collectionVariables.get('signosAntes')) + 1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin signos capturados → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pacienteId\": \"{{pacienteId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Pide al menos un signo', () => pm.expect(pm.response.json().error).to.include('al menos un signo'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin paciente → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"temperatura\": 36.8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Pide el paciente', () => pm.expect(pm.response.json().error).to.include('pacienteId'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Temperatura imposible → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenEnf}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pacienteId\": \"{{pacienteId}}\",\n  \"temperatura\": 60\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Indica el rango permitido', () => pm.expect(pm.response.json().error).to.include('fuera de rango'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Médico registra signos → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tokenMed}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Solo enfermería registra signos vitales; el médico solo los consulta.",
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pacienteId\": \"{{pacienteId}}\",\n  \"temperatura\": 36.8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Registro sin sesión → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/enfermeria/signos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "enfermeria",
+                "signos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pacienteId\": \"{{pacienteId}}\",\n  \"temperatura\": 36.8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 · Recuperar contraseña",
+      "description": "Código de 6 dígitos por correo. Estas peticiones NO cambian ninguna contraseña: prueban que la API no revela qué correos existen y que rechaza códigos y tokens inválidos. Usan un correo que no existe para no gastar el límite de 3 códigos por hora de las cuentas QA.",
+      "item": [
+        {
+          "name": "Pedir código con correo inexistente → 202 (misma respuesta que uno real)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/recuperar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "recuperar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"no-existe-{{$timestamp}}@healthnexus.test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 202', () => pm.response.to.have.status(202));",
+                  "pm.test('Mensaje genérico (no dice si la cuenta existe)', () => pm.expect(pm.response.json().mensaje).to.match(/Si el correo pertenece a una cuenta activa/));",
+                  "pm.test('Vence en 15 minutos', () => pm.expect(pm.response.json().minutos).to.eql(15));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pedir código con correo inválido → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/recuperar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "recuperar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"sin-arroba\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verificar código incorrecto → 400 genérico",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/recuperar/verificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "recuperar",
+                "verificar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"no-existe@healthnexus.test\",\n  \"codigo\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Código CODIGO_INVALIDO y mensaje genérico', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.code).to.eql('CODIGO_INVALIDO');",
+                  "  pm.expect(j.error).to.eql('El código no es válido o ya venció.');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verificar con formato inválido → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/recuperar/verificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "recuperar",
+                "verificar"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{correoEnfermeria}}\",\n  \"codigo\": \"12ab\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Restablecer con token falso → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/recuperar/restablecer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "recuperar",
+                "restablecer"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resetToken\": \"token-falso\",\n  \"nueva\": \"Hospital2026\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Código RESET_EXPIRADO', () => pm.expect(pm.response.json().code).to.eql('RESET_EXPIRADO'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Restablecer usando un token de acceso → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Un token de sesión no sirve para cambiar la contraseña: el resetToken se firma con otra clave.",
+            "url": {
+              "raw": "{{baseUrl}}/auth/recuperar/restablecer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "recuperar",
+                "restablecer"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resetToken\": \"{{tokenEnf}}\",\n  \"nueva\": \"Hospital2026\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
                 ]
               }
             }

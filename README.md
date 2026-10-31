@@ -101,7 +101,7 @@ docker compose -f docker-compose.rds.yml --env-file .env.rds run --rm --no-deps 
 3. En cada despliegue, en el servidor: `./scripts/env-desde-ssm.sh prod .env.rds` y `docker compose -f docker-compose.rds.yml --env-file .env.rds up -d --build`.
 4. Para rotar un secreto: cámbialo en SSM (paso 1 con el archivo nuevo), repite el paso 3. Cambiar `JWT_SECRET` cierra todas las sesiones.
 
-## Endpoints (todos bajo `/api`; salvo login y PIN, requieren `Authorization: Bearer <token>`)
+## Endpoints (todos bajo `/api`; salvo login, PIN y recuperación de contraseña, requieren `Authorization: Bearer <token>`)
 
 Un 403 por rol queda en `audit_logs` como `acceso_denegado` (con método y ruta, sin la query string).
 
@@ -110,6 +110,9 @@ Un 403 por rol queda en `audit_logs` como `acceso_denegado` (con método y ruta,
 | POST | /auth/login | público | users, roles (médico: responde `{ requierePin, pinToken }` en lugar del token; dispositivo bloqueado en la web: 403 `DISPOSITIVO_BLOQUEADO`) |
 | POST | /auth/pin | público (con `pinToken`) | users (`{ pinToken, pin }` → `{ token, user }`; 5 intentos fallidos cada 15 min; `pin_fallido`/`pin_exitoso` en `audit_logs`) |
 | GET | /auth/me | todos | users |
+| POST | /auth/recuperar | público | users, recuperacion_clave (`{ email }` → 202 siempre, exista o no la cuenta; envía un código de 6 dígitos que vence en 15 min; 3 por correo por hora y 10 por IP cada 15 min) |
+| POST | /auth/recuperar/verificar | público | recuperacion_clave (`{ email, codigo }` → `{ resetToken }` de 10 min; al 5.º error el código se invalida) |
+| POST | /auth/recuperar/restablecer | público (con `resetToken`) | users, sesiones_revocadas (`{ resetToken, nueva }`; 8+ caracteres, una mayúscula y un número; cierra las sesiones de la app; `clave_restablecida` en `audit_logs`) |
 | GET | /stats | médico, enfermería | pacientes, admisiones |
 | GET | /patients?q=&nivel=&page=&limit= | médico, enfermería | pacientes, admisiones (datos del paciente y `triageLevel`; `nivel` = rojo…azul o `sin`) |
 | GET | /patients/:id | médico, enfermería | pacientes, estados, municipios (ficha completa) |
@@ -176,6 +179,26 @@ Los mensajes nunca incluyen nombres, ubicación ni datos clínicos, porque se ve
    docker compose -f docker-compose.rds.yml --env-file .env.rds up -d
    ```
    En Docker local: guarda el JSON en `secrets/cuenta-de-servicio.json` (ignorado por git y por la imagen) y en `.env.docker` pon `FIREBASE_CREDENTIALS_FILE=/app/secrets/cuenta-de-servicio.json`; luego `docker compose up -d`. Sin credenciales, las notificaciones quedan desactivadas y todo lo demás funciona igual.
+
+## Recuperación de contraseña (código por correo)
+
+Flujo de la app: *¿La olvidaste?* → correo → código de 6 dígitos → contraseña nueva. La contraseña se guarda en formato de Laravel (`$2y$`, costo 12), así que sirve igual en la web y en la app.
+
+- Solo se guarda el **hash** del código; cada código vence en 15 minutos, sirve una vez y se invalida al 5.º intento fallido o al pedir otro.
+- La respuesta de `POST /auth/recuperar` es la misma exista o no el correo (no se pueden adivinar cuentas).
+- Al cambiar la contraseña se cierran las sesiones de la app abiertas antes (los tokens responden 401 `SESION_REVOCADA`) y se borra el `remember_token` de la web.
+- El **PIN del médico no se recupera por correo**: lo regenera el administrador desde la web.
+
+**Configuración (una vez):**
+1. Crea las tablas (se puede correr más de una vez):
+   - **RDS:** `mysql -h <RDS> -u admin -p healthnexusdb < database/recuperacion.sql`
+   - **Docker local:** una base nueva ya lo trae (`05-recuperacion.sql`). Si tu base ya existía:
+     ```powershell
+     Get-Content database\recuperacion.sql | docker compose exec -T db mysql -uroot -proot_dev_pass healthnexusdb
+     ```
+   Si la API arranca sin estas tablas sigue funcionando; solo la recuperación responde 500 y el cambio de contraseña no cierra sesiones.
+2. Configura el correo saliente en `.env.rds` (o en SSM): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`. Con Gmail usa una *contraseña de aplicación* (requiere verificación en dos pasos), no la contraseña de la cuenta. `SMTP_PASS` es un secreto, igual que `DB_PASS`.
+3. **Sin `SMTP_HOST`:** en desarrollo el código se imprime en los logs de la API (`docker compose logs -f api`, busca `[correo de desarrollo]`); en producción no se envía nada y el código nunca se escribe en los logs.
 
 ## Permisos por rol (alineados con los permisos de tu tabla `permissions`)
 

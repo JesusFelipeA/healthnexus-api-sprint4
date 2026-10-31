@@ -14,3 +14,7 @@ database/initdb/01-laravel.sql
 *firebase-adminsdk*.json
 cuenta-de-servicio*.json
 secrets/
+
+# Salidas de Newman
+reporte-api.html
+resultado.json

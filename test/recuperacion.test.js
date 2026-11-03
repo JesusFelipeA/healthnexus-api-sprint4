@@ -420,6 +420,30 @@ test('correo: en desarrollo sin SMTP el código se imprime en la consola para po
   }
 });
 
+test('correo: muestra el código, la hora de vencimiento en hora de México y los pasos', () => {
+  // 21:37 UTC = 15:37 en la Ciudad de México (UTC-6, sin horario de verano); +15 min = 15:52
+  const m = correo.mensajeCodigo({ nombre: 'Ana López', codigo: '048213', minutos: 15, ahora: new Date('2026-11-03T21:37:00Z') });
+  assert.equal(m.subject, '048213 es tu código de HealthNexus');
+  assert.match(m.html, />048213</);
+  assert.match(m.html, /15:52/);
+  assert.match(m.text, /Tu código es: 048213/);
+  assert.match(m.text, /Vence en 15 minutos \(a las 15:52, hora del centro de México\)/);
+  assert.match(m.html, /Revisa tu correo/);
+  assert.match(m.html, /¿No fuiste tú\?/);
+});
+
+test('correo: con una zona horaria inválida omite la hora pero conserva los minutos', () => {
+  const antes = process.env.MAIL_TZ;
+  process.env.MAIL_TZ = 'Zona/Inexistente';
+  try {
+    const m = correo.mensajeCodigo({ codigo: '123456', minutos: 15 });
+    assert.match(m.text, /Vence en 15 minutos y solo sirve una vez/);
+    assert.match(m.html, /Vence en <strong[^>]*>15 minutos<\/strong>/);
+  } finally {
+    if (antes === undefined) delete process.env.MAIL_TZ; else process.env.MAIL_TZ = antes;
+  }
+});
+
 test('correo: el nombre del usuario se escapa en el HTML', () => {
   const m = correo.mensajeCodigo({ nombre: '<script>x</script>', codigo: '123456', minutos: 15 });
   assert.equal(m.html.includes('<script>'), false);

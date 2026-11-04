@@ -101,6 +101,15 @@ docker compose -f docker-compose.rds.yml --env-file .env.rds run --rm --no-deps 
 3. En cada despliegue, en el servidor: `./scripts/env-desde-ssm.sh prod .env.rds` y `docker compose -f docker-compose.rds.yml --env-file .env.rds up -d --build`.
 4. Para rotar un secreto: cámbialo en SSM (paso 1 con el archivo nuevo), repite el paso 3. Cambiar `JWT_SECRET` cierra todas las sesiones.
 
+## Documentación interactiva (Swagger)
+
+- **Swagger UI:** `http://localhost:3000/api/docs` (local) · `https://healthnexus.duckdns.org/api/docs` (producción)
+- **Especificación OpenAPI 3.0:** `/api/docs/openapi.json` (se puede importar en Postman: *Import → Link*)
+
+Para probar una ruta desde Swagger: en **Authorize** escribe una huella en `huellaDispositivo` (por ejemplo `swagger-pruebas-0001`), llama a `POST /api/auth/login` (y `/api/auth/pin` si es médico) y pega el `token` en `bearerAuth`.
+
+La especificación está en `src/openapi.js`. Si agregas o quitas una ruta, actualízala ahí: `test/openapi.test.js` falla si una ruta de Express no está documentada o si se documenta una que no existe. Para no publicar la documentación, usa `API_DOCS=0`.
+
 ## Endpoints (todos bajo `/api`; salvo login, PIN y recuperación de contraseña, requieren `Authorization: Bearer <token>`)
 
 Un 403 por rol queda en `audit_logs` como `acceso_denegado` (con método y ruta, sin la query string).

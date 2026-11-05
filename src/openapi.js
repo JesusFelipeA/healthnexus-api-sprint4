@@ -288,9 +288,10 @@ const paths = {
   '/api/enfermeria/administraciones': {
     get: op({ tag: 'Enfermería', resumen: 'Medicamentos administrados', roles: MED_ENF, params: [q('pacienteId', int(), 'Solo de este paciente'), ...PAGINA], ok: { 200: ok('Administraciones', lista(ref('Administracion')), undefined, { headers: TOTAL_HEADER }) } }),
     post: op({
-      tag: 'Enfermería', resumen: 'Registrar administración de medicamento', roles: ['enfermeria'], desc: 'Si no se envía la vía, se usa la del medicamento.',
-      body: { schema: obj({ pacienteId: int(), medicamentoId: int(), dosis: str(), via: str(), observaciones: str(), reaccionAdversa: bool() }, ['pacienteId', 'medicamentoId', 'dosis']), ejemplo: { pacienteId: 501, medicamentoId: 12, dosis: '1 g', via: 'Intravenosa', reaccionAdversa: false } },
-      ok: { 201: ok('Registrada', obj({ id: int(), medicamento: str() })) }, errores: [400, 404],
+      tag: 'Enfermería', resumen: 'Registrar administración de medicamento', roles: ['enfermeria'],
+      desc: 'Igual que la web: el paciente debe estar hospitalizado (el administrador queda exento) y se descuentan `unidades` (1 por defecto) de los lotes vigentes que caducan primero. En la misma transacción se registran los movimientos de salida, la nota de enfermería y la administración. Si no se envía la vía, se usa la del medicamento. 409 `SIN_STOCK` o `NO_HOSPITALIZADO`.',
+      body: { schema: obj({ pacienteId: int(), medicamentoId: int(), dosis: str({ maxLength: 50 }), via: str({ maxLength: 50 }), unidades: int({ minimum: 1, maximum: 20, default: 1 }), observaciones: str({ maxLength: 1000 }), reaccionAdversa: bool() }, ['pacienteId', 'medicamentoId', 'dosis']), ejemplo: { pacienteId: 501, medicamentoId: 12, dosis: '1 g', via: 'Intravenosa', unidades: 1, reaccionAdversa: false } },
+      ok: { 201: ok('Registrada y descontada del inventario', obj({ id: int(), medicamento: str(), notaId: int(), unidades: int(), stockAnterior: int(), stockNuevo: int(), movimientos: lista(obj({ id: int(), loteId: int(), cantidad: int() })) })) }, errores: [400, 404, 409],
     }),
   },
   '/api/seguimiento': {

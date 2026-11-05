@@ -3,7 +3,8 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const { errorHandler } = require('./middleware');
+const { errorHandler, HttpError } = require('./middleware');
+const pool = require('./db');
 
 const app = express();
 // Solo confía en X-Forwarded-For si la API está detrás de un proxy real (Nginx, Azure...).
@@ -26,12 +27,29 @@ const origins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim())
 // Se permiten los orígenes de CORS_ORIGINS y el propio servidor (Swagger UI en /api/docs llama a la API desde ahí).
 const mismoOrigen = (req, origin) => origin === `${req.protocol}://${req.get('host')}`;
 app.use(cors((req, cb) => cb(null, {
-  origin: (origin, ok) => (!origin || origins.includes(origin) || mismoOrigen(req, origin) ? ok(null, true) : ok(new Error('Origen no permitido por CORS'))),
+  // Un origen no permitido recibe 403 (no 500) y no deja la traza en el log
+  origin: (origin, ok) => (!origin || origins.includes(origin) || mismoOrigen(req, origin) ? ok(null, true) : ok(new HttpError(403, 'Origen no permitido', 'ORIGEN_NO_PERMITIDO'))),
   exposedHeaders: ['X-Total-Count'],
 })));
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+// Salud de la API Y de la base de datos: con la base caída responde 503, así el HEALTHCHECK de Docker
+// y cualquier monitoreo detectan el problema (por ejemplo, el apagado nocturno de RDS).
+const SALUD_TIMEOUT_MS = 2000;
+app.get('/api/health', async (req, res) => {
+  let espera;
+  try {
+    await Promise.race([
+      pool.query('SELECT 1'),
+      new Promise((_, rechazar) => { espera = setTimeout(() => rechazar(new Error('timeout')), SALUD_TIMEOUT_MS); }),
+    ]);
+    res.json({ ok: true, db: 'ok' });
+  } catch {
+    res.status(503).json({ ok: false, db: 'sin_conexion', error: 'La base de datos no está disponible.' });
+  } finally {
+    clearTimeout(espera);
+  }
+});
 
 // Documentación interactiva (Swagger UI): /api/docs  ·  especificación OpenAPI: /api/docs/openapi.json
 const docs = require('./docs');

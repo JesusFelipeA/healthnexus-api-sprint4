@@ -6,7 +6,7 @@ const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch
 
 // Error con código HTTP
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, code) { super(message); this.status = status; if (code) this.code = code; }
 }
 
 const sqlSesion = (revocacion) => `
@@ -109,13 +109,23 @@ function leerCoordenadas(lat, lng) {
 // Entero positivo o null
 const idValido = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 && v !== '' && v !== null ? Number(v) : null);
 
+const ERRORES_DE_CONEXION = new Set(['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNRESET',
+  'PROTOCOL_CONNECTION_LOST', 'ER_CON_COUNT_ERROR', 'PROTOCOL_SEQUENCE_TIMEOUT', 'POOL_CLOSED']);
+
 function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-vars
   // Errores del lector de JSON: mensaje fijo, nunca el texto del parser
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON inválido' });
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Solicitud demasiado grande' });
+  // Sin conexión con la base de datos (RDS apagado, red, demasiadas conexiones): 503 con mensaje fijo y una sola línea en el log
+  if (!err.status && ERRORES_DE_CONEXION.has(err.code)) {
+    console.error(`Base de datos no disponible (${err.code}) en ${req.method} ${req.originalUrl.split('?')[0]}`);
+    return res.status(503).json({ error: 'El servicio no está disponible en este momento. Intenta más tarde.', code: 'SERVICIO_NO_DISPONIBLE' });
+  }
   const status = err.status || 500;
   if (status === 500) console.error(err);
-  res.status(status).json({ error: status === 500 ? 'Error interno del servidor' : err.message });
+  const cuerpo = { error: status === 500 ? 'Error interno del servidor' : err.message };
+  if (status !== 500 && err.code && /^[A-Z_]+$/.test(err.code)) cuerpo.code = err.code;
+  res.status(status).json(cuerpo);
 }
 
 module.exports = { ah, HttpError, auth, roles, audit, errorHandler, paginar, leerCoordenadas, idValido };

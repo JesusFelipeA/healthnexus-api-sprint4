@@ -106,12 +106,15 @@ test('docs: se puede desactivar con API_DOCS=0', () => {
 });
 
 test('CORS: se aceptan el propio servidor (Swagger UI) y los orígenes configurados; otros no', async () => {
-  const pedir = (origin) => fetch(`${base}/api/health`, { headers: { Origin: origin } });
+  const pedir = (origin) => fetch(`${base}/api/docs/openapi.json`, { headers: { Origin: origin } });
   const propio = await pedir(base);
   assert.equal(propio.status, 200);
   assert.equal(propio.headers.get('access-control-allow-origin'), base);
   const web = await pedir('https://healthnexus-web.duckdns.org');
   assert.equal(web.headers.get('access-control-allow-origin'), 'https://healthnexus-web.duckdns.org');
+  // DEF-12: un origen ajeno recibe 403 con código fijo (antes 500 con la traza en el log)
   const otro = await pedir('https://sitio-malicioso.example');
+  assert.equal(otro.status, 403);
   assert.equal(otro.headers.get('access-control-allow-origin'), null);
+  assert.deepEqual(await otro.json(), { error: 'Origen no permitido', code: 'ORIGEN_NO_PERMITIDO' });
 });

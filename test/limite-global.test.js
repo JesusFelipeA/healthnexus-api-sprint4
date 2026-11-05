@@ -8,7 +8,8 @@ const app = require('../src/app');
 
 test('CP-35: la sexta petición del mismo origen en un minuto responde 429 con mensaje claro', async () => {
   const server = await new Promise((ok) => { const s = app.listen(0, () => ok(s)); });
-  const url = `http://127.0.0.1:${server.address().port}/api/health`;
+  // Ruta que no usa la base de datos (/api/health ahora la consulta)
+  const url = `http://127.0.0.1:${server.address().port}/api/docs/openapi.json`;
   const estados = [];
   for (let i = 0; i < 7; i++) estados.push((await fetch(url)).status);
   const r = await fetch(url);

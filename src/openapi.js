@@ -147,7 +147,14 @@ const responses = {
 const MED_ENF = ['medico', 'enfermeria'];
 const paths = {
   '/api/health': {
-    get: { tags: ['Sistema'], summary: 'Estado de la API', description: 'Pública. Sirve para monitoreo.', security: [], responses: { 200: ok('La API está en línea', obj({ ok: bool() }), { ok: true }) } },
+    get: {
+      tags: ['Sistema'], summary: 'Estado de la API y de la base de datos',
+      description: 'Pública. Hace `SELECT 1` en la base de datos (máximo 2 s). La usan el HEALTHCHECK de Docker y el monitoreo.', security: [],
+      responses: {
+        200: ok('API y base de datos en línea', obj({ ok: bool(), db: str({ enum: ['ok'] }) }), { ok: true, db: 'ok' }),
+        503: ok('La base de datos no responde (por ejemplo, RDS apagado)', obj({ ok: bool(), db: str({ enum: ['sin_conexion'] }), error: str() }), { ok: false, db: 'sin_conexion', error: 'La base de datos no está disponible.' }),
+      },
+    },
   },
 
   // ----- Autenticación -----
@@ -404,7 +411,7 @@ const spec = {
       '2. Llama a `POST /api/auth/login`. Si la cuenta es de médico, continúa con `POST /api/auth/pin`.',
       '3. Copia el `token` de la respuesta en **Authorize → bearerAuth** (sin la palabra Bearer).',
       '',
-      'El rol se vuelve a leer de la base de datos en cada petición. El **administrador** puede usar todas las rutas. Todas las respuestas de error tienen la forma `{ "error": "...", "code"?: "..." }`. Límite global: 120 peticiones por minuto por IP.',
+      'El rol se vuelve a leer de la base de datos en cada petición. El **administrador** puede usar todas las rutas. Todas las respuestas de error tienen la forma `{ "error": "...", "code"?: "..." }`. Si la base de datos no está disponible, cualquier ruta responde **503** con `code: "SERVICIO_NO_DISPONIBLE"`. Límite global: 120 peticiones por minuto por IP.',
     ].join('\n'),
     contact: { name: 'Equipo HealthNexus', url: 'https://github.com/JesusFelipeA/healthnexus-api-sprint4' },
   },

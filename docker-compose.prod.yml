@@ -42,6 +42,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS}
       TRUST_PROXY: ${TRUST_PROXY:-1}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-120}
+      API_DOCS: ${API_DOCS:-1}
       # Notificaciones push (opcional): cuenta de servicio de Firebase en base64
       FIREBASE_CREDENTIALS_BASE64: ${FIREBASE_CREDENTIALS_BASE64:-}
       # Recuperación de contraseña por correo (opcional; sin SMTP_HOST no se envían correos)

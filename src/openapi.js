@@ -117,6 +117,21 @@ const schemas = {
     id: int(), tipo: str({ enum: ['entrada', 'salida', 'ajuste', 'devolucion'] }), cantidad: int(), stockAnterior: int(), stockNuevo: int(),
     medicamento: str(), lote: str({ nullable: true }), usuario: str({ nullable: true }), motivo: str({ nullable: true }), fecha: str({ format: 'date-time' }),
   }),
+  Receta: obj({
+    id: int({ description: 'Id de la consulta' }), pacienteId: int(), paciente: str(), curp: str({ nullable: true }), medico: str({ nullable: true }),
+    fecha: str({ format: 'date-time' }), medicamentos: int({ description: 'Medicamentos recetados' }), recetaLibre: bool({ description: 'Tiene receta en texto libre' }),
+    dispensada: bool(), dispensadaEn: str({ format: 'date-time', nullable: true }), dispensadaPor: str({ nullable: true }),
+  }),
+  RecetaDetalle: obj({
+    id: int(), pacienteId: int(), paciente: str(), curp: str({ nullable: true }), medico: str({ nullable: true }), diagnostico: str({ nullable: true }),
+    fecha: str({ format: 'date-time' }), recetaLibre: str({ nullable: true }), dispensada: bool(), dispensadaEn: str({ format: 'date-time', nullable: true }),
+    dispensadaPor: str({ nullable: true }), notasDispensacion: str({ nullable: true }),
+    medicamentos: lista(obj({
+      medicamentoId: int(), nombre: str(), presentacion: str({ nullable: true }), concentracion: str({ nullable: true }), dosis: str({ nullable: true }),
+      via: str({ nullable: true }), frecuencia: str({ nullable: true }), duracion: str({ nullable: true }), indicaciones: str({ nullable: true }),
+      controlado: bool({ description: 'Controlado o psicotrópico' }), disponible: int({ description: 'Unidades en lotes vigentes' }),
+    })),
+  }),
   AlertaFarmacia: obj({
     tipo: str({ enum: ['sin_stock', 'caducado', 'stock_bajo', 'por_caducar'] }), nivel: str({ enum: ['critico', 'advertencia'] }),
     medicamento: str(), detalle: str(), medicamentoId: int(), loteId: int(), fecha: str({ format: 'date' }),
@@ -359,6 +374,35 @@ const paths = {
       desc: '`entrada` y `devolucion` suman; `salida` resta; en `ajuste`, `cantidad` es la nueva cantidad del lote. El motivo es obligatorio en salidas y ajustes. Un lote caducado no recibe entradas.',
       body: { schema: obj({ loteId: int(), tipo: str({ enum: ['entrada', 'salida', 'ajuste', 'devolucion'] }), cantidad: int({ minimum: 0, maximum: 1000000 }), motivo: str({ minLength: 3 }) }, ['loteId', 'tipo', 'cantidad']), ejemplo: { loteId: 31, tipo: 'salida', cantidad: 10, motivo: 'Surtido a Urgencias, cama 12' } },
       ok: { 201: ok('Movimiento registrado', obj({ id: int(), tipo: str(), medicamento: str(), stockAnterior: int(), stockNuevo: int(), cantidadLote: int() })) }, errores: [400, 404, 409],
+    }),
+  },
+  '/api/farmacia/recetas/resumen': {
+    get: op({ tag: 'Farmacia', resumen: 'Resumen de dispensación', roles: ['farmacia'], ok: { 200: ok('Contadores', obj({ pendientes: int(), dispensadasHoy: int(), dispensadasMes: int() })) } }),
+  },
+  '/api/farmacia/recetas': {
+    get: op({ tag: 'Farmacia', resumen: 'Recetas por dispensar', desc: 'Consultas finalizadas con medicamentos recetados o receta libre, de la más reciente a la más antigua.', roles: ['farmacia'],
+      params: [q('estado', str({ enum: ['pendientes', 'dispensadas', 'todas'], default: 'pendientes' }), 'Estado de dispensación'), q('q', str(), 'Nombre o CURP del paciente'), ...PAGINA],
+      ok: { 200: ok('Recetas', paginado(ref('Receta'))) }, errores: [400] }),
+  },
+  '/api/farmacia/recetas/{id}': {
+    get: op({ tag: 'Farmacia', resumen: 'Detalle de una receta', desc: 'Incluye lo disponible de cada medicamento en lotes vigentes.', roles: ['farmacia'], params: [idPath('id', 'Id de la consulta')],
+      ok: { 200: ok('Receta', ref('RecetaDetalle')) }, errores: [400, 404] }),
+  },
+  '/api/farmacia/recetas/{id}/dispensar': {
+    post: op({
+      tag: 'Farmacia', resumen: 'Dispensar receta', roles: ['farmacia'], params: [idPath('id', 'Id de la consulta')],
+      desc: 'Igual que la web: descuenta 1 unidad (o las indicadas en `unidades`) de cada medicamento recetado, de los lotes vigentes que caducan primero, y marca la receta como dispensada. Todo en una transacción: si falta stock de cualquier medicamento no se descuenta nada. 409 `YA_DISPENSADA`, `SIN_RECETA`, `SIN_STOCK` o `CONSULTA_NO_FINALIZADA`.',
+      body: { schema: obj({ notas: str({ maxLength: 500 }), unidades: { type: 'object', description: 'Opcional. { medicamentoId: unidades } para entregar más de 1 unidad', additionalProperties: int({ minimum: 1, maximum: 100 }) } }), ejemplo: { notas: 'Entregado al familiar', unidades: { 12: 2 } } },
+      ok: { 200: ok('Dispensada', obj({ id: int(), dispensada: bool(), medicamentos: lista(obj({ medicamentoId: int(), medicamento: str(), unidades: int(), stockAnterior: int(), stockNuevo: int(), movimientos: lista(obj({ id: int(), loteId: int(), cantidad: int() })) })) })) },
+      errores: [400, 404, 409],
+    }),
+  },
+  '/api/farmacia/recetas/{id}/revertir': {
+    post: op({
+      tag: 'Farmacia', resumen: 'Revertir dispensación', roles: 'admin', params: [idPath('id', 'Id de la consulta')],
+      desc: 'Devuelve a cada lote las unidades que se le descontaron y la receta vuelve a quedar pendiente. 409 `NO_DISPENSADA`.',
+      ok: { 200: ok('Revertida', obj({ id: int(), dispensada: bool(), devueltos: lista(obj({ medicamentoId: int(), medicamento: str(), unidades: int(), stockNuevo: int() })) })) },
+      errores: [400, 404, 409],
     }),
   },
   '/api/farmacia/alertas': {

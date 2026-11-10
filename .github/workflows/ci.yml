@@ -1,0 +1,29 @@
+name: CI API
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+permissions:
+  contents: read
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pruebas automatizadas con cobertura
+        run: node --test --experimental-test-coverage test/*.test.js
+      - name: Auditoría de dependencias
+        run: npm audit --omit=dev --audit-level=high
+  imagen:
+    needs: pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar imagen de producción
+        run: docker build --target prod -t healthnexus-api:${{ github.sha }} .

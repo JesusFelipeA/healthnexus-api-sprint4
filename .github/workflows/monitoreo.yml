@@ -1,0 +1,24 @@
+# Disponibilidad de la API (24/7) y de la web (07:00 a 23:00 hora del centro de México,
+# porque EventBridge la apaga fuera de ese horario). Hora de cron en UTC.
+name: Monitoreo
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  comprobar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: API
+        run: |
+          curl -fsS -o /dev/null -w 'API HTTP %{http_code} en %{time_total}s\n' --max-time 15 https://healthnexus.duckdns.org/api/health
+      - name: Web
+        run: |
+          h=$(TZ=America/Mexico_City date +%H)
+          if [ "$h" -ge 7 ] && [ "$h" -lt 23 ]; then
+            curl -fsS -o /dev/null -w 'Web HTTP %{http_code} en %{time_total}s\n' --max-time 20 https://healthnexus-web.duckdns.org/
+          else
+            echo 'Web fuera de horario: apagada a propósito'
+          fi

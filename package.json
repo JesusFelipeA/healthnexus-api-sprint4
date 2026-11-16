@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:junit": "node -e \"require('fs').mkdirSync('reports',{recursive:true})\" && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/reporte-junit.mjs --test-reporter-destination=reports/junit-api.xml test/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -92,13 +92,16 @@ const schemas = {
     id: int(), pacienteId: int(), paciente: str(), temperatura: num({ nullable: true }), fc: int({ nullable: true }), fr: int({ nullable: true }),
     presion: str({ nullable: true, example: '120/80' }), spo2: int({ nullable: true }), glucosa: int({ nullable: true }), peso: num({ nullable: true }),
     talla: num({ nullable: true }), dolor: int({ nullable: true }), triage: str({ nullable: true }), motivo: str({ nullable: true }),
-    notas: str({ nullable: true }), registradoPor: str({ nullable: true }), fecha: str({ format: 'date-time' }),
+    notas: str({ nullable: true }), registradoPor: str({ nullable: true }), fecha: str({ format: 'date-time', description: 'Hora de la toma (la de captura si se registró sin conexión)' }),
+    sinConexion: bool(),
   }),
   SignosNuevos: obj({
     pacienteId: int(), temperatura: num({ minimum: 25, maximum: 45 }), frecuenciaCardiaca: int({ minimum: 10, maximum: 300 }),
     frecuenciaRespiratoria: int({ minimum: 3, maximum: 100 }), saturacionOxigeno: int({ minimum: 30, maximum: 100 }), glucosa: int({ minimum: 10, maximum: 1500 }),
     peso: num({ minimum: 0.3, maximum: 500 }), talla: num({ minimum: 0.2, maximum: 2.6 }), escalaDolor: int({ minimum: 0, maximum: 10 }),
     presionArterial: str({ pattern: '^\\d{2,3}/\\d{2,3}$', example: '120/80' }), triage: ref('NivelTriage'), motivoConsulta: str(), notas: str(),
+    clientUuid: str({ format: 'uuid', description: 'Solo para registros capturados sin conexión: identificador generado en el dispositivo' }),
+    capturadoEn: str({ format: 'date-time', description: 'Hora real de la toma (ISO 8601 con zona); hasta 72 h antes' }),
   }, ['pacienteId']),
   Administracion: obj({
     id: int(), pacienteId: int(), paciente: str(), medicamento: str(), dosis: str(), via: str(), fecha: str({ format: 'date-time' }),
@@ -295,9 +298,9 @@ const paths = {
   '/api/enfermeria/signos': {
     get: op({ tag: 'Enfermería', resumen: 'Consultar signos vitales', roles: MED_ENF, params: [q('pacienteId', int(), 'Solo de este paciente'), q('limit', int({ minimum: 1, maximum: 200, default: 50 }), 'Máximo de registros')], ok: { 200: ok('Registros, el más reciente primero', lista(ref('Signos'))) } }),
     post: op({
-      tag: 'Enfermería', resumen: 'Registrar signos vitales', roles: ['enfermeria'], desc: 'Todos los valores son opcionales, pero debe venir al menos uno. Fuera de los rangos indicados responde 400.',
+      tag: 'Enfermería', resumen: 'Registrar signos vitales', roles: ['enfermeria'], desc: 'Todos los valores son opcionales, pero debe venir al menos uno. Fuera de los rangos indicados responde 400. Para registros capturados sin conexión se envían `clientUuid` y `capturadoEn`: si el mismo `clientUuid` llega otra vez responde 200 con `duplicado: true` (no se duplica) y 409 si pertenece a otra cuenta.',
       body: { schema: ref('SignosNuevos'), ejemplo: { pacienteId: 501, temperatura: 37.9, frecuenciaCardiaca: 98, presionArterial: '124/80', saturacionOxigeno: 95 } },
-      ok: { 201: ok('Registro creado', obj({ id: int() })) }, errores: [400, 404],
+      ok: { 201: ok('Registro creado', obj({ id: int() })), 200: ok('Ya se había recibido (reintento sin conexión)', obj({ id: int(), duplicado: bool() })) }, errores: [400, 404, 409],
     }),
   },
   '/api/enfermeria/administraciones': {

@@ -18,3 +18,6 @@ secrets/
 # Salidas de Newman
 reporte-api.html
 resultado.json
+
+# Reportes JUnit de las pruebas (npm run test:junit)
+reports/

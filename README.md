@@ -13,6 +13,7 @@ Usa los mismos usuarios, roles y contraseñas (bcrypt) que el panel web.
 5. `npm run dev` (o `npm start`). Prueba: http://localhost:3000/api/health
 6. Opcional (CP-38, rendimiento): `mysql -u root -p healthnexusdb < database/indices_rendimiento.sql`
 7. Pruebas automáticas (no necesitan base de datos): `npm test`
+8. Mismas pruebas con reporte **JUnit** (XML): `npm run test:junit` → `reports/junit-api.xml`. Agrupa un `<testsuite>` por archivo de prueba, y lo leen Jenkins (`junit 'reports/*.xml'`), GitHub Actions y cualquier visor de JUnit. En el CI se guarda como artefacto `junit-api`.
 
 > **En el servidor (Nginx delante de la API):** pon `TRUST_PROXY=1` en el `.env`. Con 0, todos los usuarios llegan con la IP del proxy y comparten los límites de peticiones.
 

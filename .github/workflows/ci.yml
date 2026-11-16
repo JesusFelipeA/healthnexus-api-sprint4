@@ -16,8 +16,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Pruebas automatizadas con cobertura
-        run: node --test --experimental-test-coverage test/*.test.js
+      - name: Pruebas automatizadas con cobertura y reporte JUnit
+        run: |
+          mkdir -p reports
+          node --test --experimental-test-coverage \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=./scripts/reporte-junit.mjs --test-reporter-destination=reports/junit-api.xml \
+            test/*.test.js
+      - name: Guardar reporte JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-api
+          path: reports/junit-api.xml
+          if-no-files-found: warn
       - name: Auditoría de dependencias
         run: npm audit --omit=dev --audit-level=high
   imagen:

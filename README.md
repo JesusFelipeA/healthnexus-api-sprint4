@@ -13,6 +13,7 @@ Usa los mismos usuarios, roles y contraseñas (bcrypt) que el panel web.
 5. `npm run dev` (o `npm start`). Prueba: http://localhost:3000/api/health
 6. Opcional (CP-38, rendimiento): `mysql -u root -p healthnexusdb < database/indices_rendimiento.sql`
 7. Pruebas automáticas (no necesitan base de datos): `npm test`
+8. Mismas pruebas con reporte **JUnit** (XML): `npm run test:junit` → `reports/junit-api.xml`. Agrupa un `<testsuite>` por archivo de prueba, y lo leen Jenkins (`junit 'reports/*.xml'`), GitHub Actions y cualquier visor de JUnit. En el CI se guarda como artefacto `junit-api`.
 
 > **En el servidor (Nginx delante de la API):** pon `TRUST_PROXY=1` en el `.env`. Con 0, todos los usuarios llegan con la IP del proxy y comparten los límites de peticiones.
 
@@ -208,6 +209,20 @@ Flujo de la app: *¿La olvidaste?* → correo → código de 6 dígitos → cont
    Si la API arranca sin estas tablas sigue funcionando; solo la recuperación responde 500 y el cambio de contraseña no cierra sesiones.
 2. Configura el correo saliente en `.env.rds` (o en SSM): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`. Con Gmail usa una *contraseña de aplicación* (requiere verificación en dos pasos), no la contraseña de la cuenta. `SMTP_PASS` es un secreto, igual que `DB_PASS`.
 3. **Sin `SMTP_HOST`:** en desarrollo el código se imprime en los logs de la API (`docker compose logs -f api`, busca `[correo de desarrollo]`); en producción no se envía nada y el código nunca se escribe en los logs.
+
+## Modo sin conexión (fase 1: signos vitales)
+La app móvil y la web guardan los signos vitales en una cola cifrada cuando no hay conexión (o el servidor está apagado) y los envían al reconectar. `POST /enfermeria/signos` acepta dos campos más:
+- `clientUuid`: identificador que genera el dispositivo. Si el mismo registro llega otra vez (reintento) responde **200** `{ id, duplicado: true }` y no se duplica; si ese identificador ya lo usó otra cuenta, **409**.
+- `capturadoEn`: hora real de la toma (ISO 8601 con zona). Se acepta hasta **72 horas** después y nunca en el futuro.
+
+`GET /enfermeria/signos` devuelve en `fecha` la hora de la toma y `sinConexion: true` en los registros que llegaron así. La bitácora registra la hora de captura.
+
+**Antes de desplegar esta versión**, agrega las columnas (se puede correr más de una vez; si ya se corrió la migración de Laravel no hace nada):
+- **EC2 / RDS:** `mysql -h <host> -u admin -p healthnexusdb < database/sin-conexion.sql`
+- **Docker local:** una base nueva ya lo trae (`06-sin-conexion.sql`). Si tu base ya existía:
+  ```powershell
+  Get-Content database\sin-conexion.sql | docker compose exec -T db mysql -uroot -proot_dev_pass healthnexusdb
+  ```
 
 ## Permisos por rol (alineados con los permisos de tu tabla `permissions`)
 

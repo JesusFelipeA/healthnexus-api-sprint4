@@ -11,3 +11,4 @@ secrets
 *firebase-adminsdk*.json
 cuenta-de-servicio*.json
 database/initdb
+reports

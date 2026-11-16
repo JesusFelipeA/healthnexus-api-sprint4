@@ -15,6 +15,44 @@ function num(body, key, label, min, max, { int = false } = {}) {
   return n;
 }
 
+/* ---------------- MODO SIN CONEXIÓN (fase 1: signos vitales) ----------------
+   El teléfono o el navegador guardan el registro en una cola cuando no hay conexión y lo envían al reconectar con:
+     clientUuid   identificador único que generan ellos; si el mismo registro llega dos veces (reintento), no se duplica
+     capturadoEn  hora real de la toma (ISO 8601); se acepta hasta MAX_ATRASO_HORAS después
+   Respuestas: 201 creado · 200 { duplicado: true } si ya se había recibido · 409 si ese clientUuid es de otra cuenta. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_ATRASO_HORAS = 72;
+const TOLERANCIA_RELOJ_MS = 5 * 60 * 1000;
+
+function datosSinConexion(b) {
+  if (b.clientUuid === undefined && b.capturadoEn === undefined) return null;
+  const clientUuid = String(b.clientUuid || '').trim().toLowerCase();
+  if (!UUID.test(clientUuid)) throw new HttpError(400, 'clientUuid inválido');
+  if (b.capturadoEn === undefined || b.capturadoEn === null || b.capturadoEn === '') return { clientUuid, capturadoEn: null };
+  const t = new Date(b.capturadoEn);
+  if (Number.isNaN(t.getTime()) || !/[zZ]|[+-]\d{2}:?\d{2}$/.test(String(b.capturadoEn))) {
+    throw new HttpError(400, 'capturadoEn debe ser una fecha ISO 8601 con zona horaria');
+  }
+  const ahora = Date.now();
+  if (t.getTime() > ahora + TOLERANCIA_RELOJ_MS) throw new HttpError(400, 'La hora de captura no puede estar en el futuro');
+  if (t.getTime() < ahora - MAX_ATRASO_HORAS * 3600 * 1000) {
+    throw new HttpError(400, `El registro tiene más de ${MAX_ATRASO_HORAS} horas sin enviarse; captúralo de nuevo en la web`);
+  }
+  return { clientUuid, capturadoEn: t };
+}
+
+// DATETIME en hora local de México (UTC-6, sin horario de verano), igual que AHORA_MX y que Laravel
+const fechaMx = (d) => new Date(d.getTime() - 6 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+
+// Si el clientUuid ya existe: 200 con el mismo id (reintento) o 409 si lo envió otra cuenta
+async function yaRecibido(req, res, clientUuid) {
+  const [[prev]] = await pool.query('SELECT id, user_id FROM signos_vitales WHERE client_uuid = ?', [clientUuid]);
+  if (!prev) return false;
+  if (Number(prev.user_id) !== Number(req.user.id)) throw new HttpError(409, 'Ese registro ya fue enviado desde otra cuenta');
+  res.status(200).json({ id: prev.id, duplicado: true });
+  return true;
+}
+
 async function pacienteActivo(id) {
   const [[p]] = await pool.query('SELECT id FROM pacientes WHERE id = ? AND activo = 1', [id]);
   if (!p) throw new HttpError(404, 'Paciente no encontrado');
@@ -31,12 +69,13 @@ router.get('/signos', auth, LEER, ah(async (req, res) => {
     `SELECT sv.id, sv.paciente_id AS pacienteId, CONCAT_WS(' ', p.nombre, p.apellido_paterno, p.apellido_materno) AS paciente,
             sv.temperatura, sv.frecuencia_cardiaca AS fc, sv.frecuencia_respiratoria AS fr, sv.presion_arterial AS presion,
             sv.saturacion_oxigeno AS spo2, sv.glucosa, sv.peso, sv.talla, sv.escala_dolor AS dolor, sv.triage,
-            sv.motivo_consulta AS motivo, sv.notas, u.name AS registradoPor, sv.created_at AS fecha
+            sv.motivo_consulta AS motivo, sv.notas, u.name AS registradoPor,
+            COALESCE(sv.capturado_en, sv.created_at) AS fecha, sv.sin_conexion AS sinConexion
      FROM signos_vitales sv
      JOIN pacientes p ON p.id = sv.paciente_id
      LEFT JOIN users u ON u.id = sv.user_id
-     ${w} ORDER BY sv.id DESC LIMIT ?`, [...params, limit]);
-  res.json(rows);
+     ${w} ORDER BY COALESCE(sv.capturado_en, sv.created_at) DESC, sv.id DESC LIMIT ?`, [...params, limit]);
+  res.json(rows.map((r) => ({ ...r, sinConexion: !!r.sinConexion })));
 }));
 
 // POST /api/enfermeria/signos  (todos los valores son opcionales, pero debe venir al menos uno)
@@ -58,15 +97,32 @@ router.post('/signos', auth, roles('enfermeria'), ah(async (req, res) => {
   if (!presion && Object.values(v).every((x) => x === null)) throw new HttpError(400, 'Registra al menos un signo vital');
   let triage = null;
   if (b.triage) { triage = String(b.triage).toLowerCase(); if (!NIVELES.includes(triage)) throw new HttpError(400, `triage inválido. Usa: ${NIVELES.join(', ')}`); }
+  const offline = datosSinConexion(b);
+  if (offline && await yaRecibido(req, res, offline.clientUuid)) return;
   await pacienteActivo(b.pacienteId);
 
-  const [r] = await pool.query(
-    `INSERT INTO signos_vitales (paciente_id, user_id, temperatura, frecuencia_cardiaca, frecuencia_respiratoria, presion_arterial,
-       saturacion_oxigeno, glucosa, peso, talla, escala_dolor, triage, triage_manual, motivo_consulta, notas, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())`,
-    [b.pacienteId, req.user.id, v.temperatura, v.fc, v.fr, presion, v.spo2, v.glucosa, v.peso, v.talla, v.dolor,
-     triage, triage ? 1 : 0, b.motivoConsulta ? String(b.motivoConsulta).trim() : null, b.notas ? String(b.notas).trim() : null]);
-  await audit(req, { evento: 'created', modulo: 'signos_vitales', descripcion: 'Signos vitales registrados', tipo: 'signos_vitales', id: r.insertId, sensible: 1 });
+  // Los capturados sin conexión llevan como fecha de registro la hora real de la toma (así quedan en orden en
+  // la web, que ordena por created_at); updated_at y la bitácora guardan cuándo llegaron.
+  const capturado = offline && offline.capturadoEn ? fechaMx(offline.capturadoEn) : null;
+  let r;
+  try {
+    [r] = await pool.query(
+      `INSERT INTO signos_vitales (paciente_id, user_id, client_uuid, temperatura, frecuencia_cardiaca, frecuencia_respiratoria, presion_arterial,
+         saturacion_oxigeno, glucosa, peso, talla, escala_dolor, triage, triage_manual, motivo_consulta, notas,
+         capturado_en, sin_conexion, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${capturado ? '?' : AHORA_MX},${AHORA_MX})`,
+      [b.pacienteId, req.user.id, offline ? offline.clientUuid : null, v.temperatura, v.fc, v.fr, presion, v.spo2, v.glucosa, v.peso, v.talla, v.dolor,
+       triage, triage ? 1 : 0, b.motivoConsulta ? String(b.motivoConsulta).trim() : null, b.notas ? String(b.notas).trim() : null,
+       capturado, capturado ? 1 : 0, ...(capturado ? [capturado] : [])]);
+  } catch (e) {
+    // Dos envíos simultáneos del mismo registro: el segundo choca con el índice único y responde como reintento
+    if (e && e.code === 'ER_DUP_ENTRY' && offline && await yaRecibido(req, res, offline.clientUuid)) return;
+    throw e;
+  }
+  const descripcion = offline && offline.capturadoEn
+    ? `Signos vitales capturados sin conexión el ${fechaMx(offline.capturadoEn)} y sincronizados`
+    : 'Signos vitales registrados';
+  await audit(req, { evento: 'created', modulo: 'signos_vitales', descripcion, tipo: 'signos_vitales', id: r.insertId, sensible: 1 });
   res.status(201).json({ id: r.insertId });
 }));
 

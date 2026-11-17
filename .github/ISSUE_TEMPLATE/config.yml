@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reportar una vulnerabilidad de seguridad
+    url: https://github.com/JesusFelipeA/healthnexus-api-sprint4/security/advisories/new
+    about: No publiques fallas de seguridad en un issue; repórtalas de forma privada aquí.
+  - name: Documentación de la API (Swagger)
+    url: https://healthnexus.duckdns.org/api/docs
+    about: Consulta los endpoints, cuerpos y respuestas antes de reportar.
+  - name: Problemas de la app móvil
+    url: https://github.com/JesusFelipeA/healthnexus-m-docker/issues
+    about: Si el error es de pantallas o del funcionamiento en el teléfono, repórtalo en el repositorio de la app.

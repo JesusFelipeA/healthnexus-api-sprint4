@@ -1,0 +1,40 @@
+name: Solicitud de función
+description: Propón un endpoint nuevo o una mejora en la API.
+title: "[Función]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: ¿Qué problema resuelve?
+      description: ¿Qué necesita la app móvil, la web o el personal del hospital?
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Propuesta
+      description: Método, ruta, cuerpo de ejemplo y respuesta esperada.
+      placeholder: |
+        GET /api/patients/:id/alergias
+        Respuesta: [{ "id": 1, "sustancia": "Penicilina", "severidad": "alta" }]
+    validations:
+      required: true
+  - type: dropdown
+    id: roles
+    attributes:
+      label: Roles con acceso
+      multiple: true
+      options:
+        - Médico
+        - Enfermería
+        - Farmacia
+        - Administrador
+  - type: checkboxes
+    id: alcance
+    attributes:
+      label: Alcance
+      options:
+        - label: Requiere cambios en la base de datos
+        - label: Requiere cambios en la app móvil
+        - label: Requiere cambios en la web Laravel

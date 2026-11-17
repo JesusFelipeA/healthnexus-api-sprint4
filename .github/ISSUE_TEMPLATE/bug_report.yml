@@ -1,0 +1,59 @@
+name: Reporte de error
+description: Un endpoint de la API no funciona como debería.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportarlo. **No incluyas datos reales de pacientes, tokens, contraseñas ni archivos `.env`.**
+        Si es un problema de seguridad, no lo publiques aquí: sigue la [Política de seguridad](https://github.com/JesusFelipeA/healthnexus-api-sprint4/security/policy).
+  - type: input
+    id: endpoint
+    attributes:
+      label: Endpoint
+      placeholder: "POST /api/patients"
+    validations:
+      required: true
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: ¿Qué pasó y qué esperabas?
+    validations:
+      required: true
+  - type: textarea
+    id: peticion
+    attributes:
+      label: Petición y respuesta
+      description: El cuerpo enviado, el código HTTP y la respuesta. Reemplaza el token por `<token>`.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: rol
+    attributes:
+      label: Rol del usuario
+      multiple: true
+      options:
+        - Médico
+        - Enfermería
+        - Farmacia
+        - Administrador
+        - Sin sesión (público)
+  - type: dropdown
+    id: ambiente
+    attributes:
+      label: Ambiente
+      options:
+        - Local (Docker)
+        - Local (sin Docker)
+        - Staging / QA
+        - Producción
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Registros del servidor
+      description: Salida de `docker compose logs api`, si la tienes.
+      render: shell

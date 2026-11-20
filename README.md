@@ -313,6 +313,9 @@ Reglas (tomadas de cómo están tus datos):
 ## Observabilidad (Grafana Cloud)
 `src/telemetria.js` mide con OpenTelemetry cada petición, ruta y consulta SQL. Grafana Alloy (contenedor opcional en `docker-compose.rds.yml`) manda los datos a Grafana Cloud, donde está el panel `observabilidad/grafana/healthnexus-api.json`: peticiones, errores, latencia p95 por ruta, trazas lentas o con error, y CPU, memoria y disco del EC2. No sale ningún dato de pacientes: se quitan búsquedas, ids, valores SQL y encabezados. Sin `OTEL_EXPORTER_OTLP_ENDPOINT` queda apagada. Guía completa en [`observabilidad/README.md`](observabilidad/README.md).
 
+## Prueba de carga (k6)
+`npm run carga` simula el turno de enfermería con 20 usuarios: lista de pacientes, signos vitales, guardar una toma y reintentarla. Falla si hay más de 1 % de errores, si el p95 pasa de 800 ms o si un reintento duplica el registro, y deja `reports/k6-turno-enfermeria.xml` (JUnit). Cómo correrla en [`carga/README.md`](carga/README.md). Nunca contra producción.
+
 ## Pendiente (siguiente fase)
 
 - Publicar con HTTPS (Nginx) y un `JWT_SECRET` largo y distinto al de pruebas.

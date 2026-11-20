@@ -1,0 +1,104 @@
+// Grafana Alloy: recibe las trazas y métricas de la API y las manda a Grafana Cloud.
+// También mide el servidor (CPU, memoria, disco, red).
+//
+// Variables (en .env.rds, nunca en el repo):
+//   GRAFANA_CLOUD_OTLP_ENDPOINT  https://otlp-gateway-prod-<región>.grafana.net/otlp
+//   GRAFANA_CLOUD_INSTANCE_ID    número de la instancia (usuario del OTLP)
+//   GRAFANA_CLOUD_TOKEN          token de acceso con permisos de escritura (metrics, traces)
+//
+// No se recolectan los logs de los contenedores: pueden traer datos de pacientes.
+
+// 1. Entrada: la API manda OTLP por HTTP a alloy:4318 dentro de la red de Docker
+otelcol.receiver.otlp "api" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    metrics = [otelcol.processor.attributes.privacidad.input]
+    traces  = [otelcol.processor.attributes.privacidad.input]
+  }
+}
+
+// 2. Segunda capa de privacidad (la API ya limpia todo): si algo se cuela, aquí se borra
+otelcol.processor.attributes "privacidad" {
+  action {
+    key    = "url.query"
+    action = "delete"
+  }
+  action {
+    key    = "url.full"
+    action = "delete"
+  }
+  action {
+    key    = "http.url"
+    action = "delete"
+  }
+  action {
+    key    = "user_agent.original"
+    action = "delete"
+  }
+  action {
+    key    = "http.user_agent"
+    action = "delete"
+  }
+  action {
+    key    = "http.request.header.authorization"
+    action = "delete"
+  }
+  action {
+    key    = "http.request.header.x-device-fingerprint"
+    action = "delete"
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.salida.input]
+    traces  = [otelcol.processor.batch.salida.input]
+  }
+}
+
+// 3. Métricas del servidor (EC2), leídas del /proc y /sys del host montados en solo lectura
+prometheus.exporter.unix "servidor" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+
+  set_collectors = ["cpu", "meminfo", "loadavg", "filesystem", "diskstats", "uname"]
+
+  filesystem {
+    mount_points_exclude = "^/(dev|proc|run|sys|host/root/(proc|sys|run|var/lib/docker/.+))($|/)"
+  }
+}
+
+prometheus.scrape "servidor" {
+  targets         = prometheus.exporter.unix.servidor.targets
+  scrape_interval = "60s"
+  // Llega a Grafana Cloud como job="integrations/unix", el mismo de la integración Linux Server
+  forward_to      = [otelcol.receiver.prometheus.servidor.receiver]
+}
+
+otelcol.receiver.prometheus "servidor" {
+  output {
+    metrics = [otelcol.processor.batch.salida.input]
+  }
+}
+
+// 4. Salida: lotes hacia Grafana Cloud
+otelcol.processor.batch "salida" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.grafana_cloud.input]
+    traces  = [otelcol.exporter.otlphttp.grafana_cloud.input]
+  }
+}
+
+otelcol.auth.basic "grafana_cloud" {
+  username = sys.env("GRAFANA_CLOUD_INSTANCE_ID")
+  password = sys.env("GRAFANA_CLOUD_TOKEN")
+}
+
+otelcol.exporter.otlphttp "grafana_cloud" {
+  client {
+    endpoint = sys.env("GRAFANA_CLOUD_OTLP_ENDPOINT")
+    auth     = otelcol.auth.basic.grafana_cloud.handler
+  }
+}

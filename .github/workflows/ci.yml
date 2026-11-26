@@ -16,6 +16,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Lint (ESLint)
+        run: npm run lint
       - name: Pruebas automatizadas con cobertura y reporte JUnit
         run: |
           mkdir -p reports

@@ -1,0 +1,91 @@
+# Despliegue automático de la API a producción (EC2).
+# Corre solo cuando "CI API" termina en verde sobre un push a main, es decir, al hacer merge del PR a main.
+# También se puede lanzar a mano: Actions → Despliegue → Run workflow (despliega lo último de main).
+#
+# Cómo entra a AWS: con OIDC asume el rol github-deploy-healthnexus-api (deploy/github-despliegue.cfn.yml),
+# que dura 1 hora y solo puede ejecutar el documento de SSM HealthNexus-DesplegarApi en el EC2 de la API.
+# En GitHub no se guarda ninguna llave de AWS ni ningún secreto de la API.
+name: Despliegue
+on:
+  workflow_run:
+    workflows: [CI API]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: despliegue-produccion
+  cancel-in-progress: false
+jobs:
+  desplegar:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: produccion
+      url: https://healthnexus.duckdns.org/api/docs
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-2' }}
+      INSTANCIA: ${{ vars.EC2_INSTANCE_ID }}
+      DOCUMENTO: HealthNexus-DesplegarApi
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Revisar la configuración
+        run: |
+          [[ "$INSTANCIA" =~ ^i-[0-9a-f]{8,17}$ ]] || { echo "::error::Falta la variable EC2_INSTANCE_ID en el environment produccion"; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Commit inválido: $SHA"; exit 1; }
+          echo "Commit a desplegar: ${SHA:0:7}"
+
+      - name: Entrar a AWS con OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: despliegue-api-${{ github.run_id }}
+
+      - name: Revisar que el EC2 esté conectado a SSM
+        run: |
+          estado=$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCIA" \
+                   --query 'InstanceInformationList[0].PingStatus' --output text)
+          [[ "$estado" == "Online" ]] || { echo "::error::El EC2 no aparece en línea en SSM (estado: $estado)"; exit 1; }
+
+      - name: Desplegar en el EC2 (con regreso automático si falla)
+        run: |
+          id=$(aws ssm send-command --instance-ids "$INSTANCIA" --document-name "$DOCUMENTO" \
+                 --parameters "Sha=$SHA" --comment "Despliegue ${SHA:0:7} (run ${GITHUB_RUN_ID})" \
+                 --timeout-seconds 60 --query 'Command.CommandId' --output text)
+          echo "Comando SSM: $id"
+          estado=Pending
+          for _ in $(seq 1 120); do
+            sleep 10
+            estado=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCIA" \
+                       --query Status --output text 2>/dev/null || echo Pending)
+            case "$estado" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+          echo "::group::Salida del servidor"
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCIA" --query StandardOutputContent --output text
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCIA" --query StandardErrorContent --output text >&2
+          echo "::endgroup::"
+          if [[ "$estado" != "Success" ]]; then
+            echo "::error::El despliegue de ${SHA:0:7} terminó en '$estado'. Si la versión nueva no respondía, el servidor ya regresó a la anterior (revisa la salida)."
+            exit 1
+          fi
+          echo "### ${SHA:0:7} desplegado en producción" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revisar la API desde internet
+        run: |
+          codigo=000
+          for _ in 1 2 3 4 5 6; do
+            codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://healthnexus.duckdns.org/api/health || true)
+            if [[ "$codigo" == "200" ]]; then echo "API en línea (200)"; exit 0; fi
+            if [[ "$codigo" == "503" ]]; then echo "::warning::La API responde, pero la base de datos no (¿RDS apagado?)."; exit 0; fi
+            sleep 10
+          done
+          echo "::error::La API responde en el servidor, pero no desde internet (último código: $codigo). Revisa Nginx y el certificado."
+          exit 1

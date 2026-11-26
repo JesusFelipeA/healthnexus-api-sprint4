@@ -9,7 +9,8 @@
     "test": "node --test test/*.test.js",
     "test:junit": "node -e \"require('fs').mkdirSync('reports',{recursive:true})\" && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/reporte-junit.mjs --test-reporter-destination=reports/junit-api.xml test/*.test.js",
     "carga": "node -e \"require('fs').mkdirSync('reports',{recursive:true})\" && k6 run carga/carga-turno-enfermeria.js",
-    "carga:grafana": "node -e \"require('fs').mkdirSync('reports',{recursive:true})\" && k6 cloud run --local-execution carga/carga-turno-enfermeria.js"
+    "carga:grafana": "node -e \"require('fs').mkdirSync('reports',{recursive:true})\" && k6 cloud run --local-execution carga/carga-turno-enfermeria.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@opentelemetry/api": "^1.10.0",
@@ -35,5 +36,10 @@
     "nodemailer": "10.1.7",
     "pdfkit": "^0.20.2",
     "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0"
   }
 }

@@ -85,6 +85,10 @@ function iniciar() {
     resource: resourceFromAttributes({
       'service.name': process.env.OTEL_SERVICE_NAME || 'healthnexus-api',
       'service.namespace': 'healthnexus',
+      // Versión = commit desplegado (scripts/desplegar.sh lo pasa como TAG); sirve para comparar antes y después de un despliegue
+      'service.version': process.env.OTEL_SERVICE_VERSION || require('../package.json').version,
+      // Contenedor que respondió (su hostname es el id corto del contenedor, no trae datos de nadie)
+      'service.instance.id': require('node:os').hostname(),
       'deployment.environment.name': process.env.OTEL_AMBIENTE || process.env.NODE_ENV || 'development',
     }),
     spanProcessors: [new BatchSpanProcessor({ exporter: exportador })],

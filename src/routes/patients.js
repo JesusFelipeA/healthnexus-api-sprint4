@@ -110,8 +110,8 @@ async function parsePaciente(b) {
   const estadoCivil = ec ? enLista(ec, ESTADOS_CIVILES, 'Estado civil') : null;
   const nacionalidad = enLista(String(b.nacionalidad || 'MEXICANA').trim().toUpperCase(), NACIONALIDADES, 'Nacionalidad');
 
-  let paisNacimiento = txt(b, 'paisNacimiento', 'El país de nacimiento');
-  let pasaporte = txt(b, 'pasaporte', 'El pasaporte', { max: 30 });
+  const paisNacimiento = txt(b, 'paisNacimiento', 'El país de nacimiento');
+  const pasaporte = txt(b, 'pasaporte', 'El pasaporte', { max: 30 });
   let estadoNacimiento = txt(b, 'estadoNacimiento', 'El estado de nacimiento');
   if (nacionalidad === 'EXTRANJERA') {
     if (!paisNacimiento) throw new HttpError(400, 'El país de nacimiento es obligatorio para extranjeros');
@@ -146,7 +146,7 @@ async function parsePaciente(b) {
 
   // Domicilio: el municipio debe pertenecer al estado
   let estadoId = b.estadoId ? Number(b.estadoId) : null;
-  let municipioId = b.municipioId ? Number(b.municipioId) : null;
+  const municipioId = b.municipioId ? Number(b.municipioId) : null;
   if ((b.estadoId && !Number.isInteger(estadoId)) || (b.municipioId && !Number.isInteger(municipioId))) throw new HttpError(400, 'estadoId y municipioId deben ser números');
   if (municipioId) {
     const [[m]] = await pool.query('SELECT estado_id FROM municipios WHERE id = ?', [municipioId]);

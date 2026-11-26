@@ -34,6 +34,8 @@ jobs:
           if-no-files-found: warn
       - name: Auditoría de dependencias
         run: npm audit --omit=dev --audit-level=high
+      - name: Revisar los scripts de bash (incluido el de despliegue)
+        run: shellcheck scripts/*.sh
   imagen:
     needs: pruebas
     runs-on: ubuntu-latest

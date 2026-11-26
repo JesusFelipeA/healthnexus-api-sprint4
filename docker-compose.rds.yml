@@ -36,6 +36,7 @@ services:
       # Observabilidad (opcional): vacío = apagada. Con Alloy: http://alloy:4318
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: healthnexus-api
+      OTEL_SERVICE_VERSION: ${TAG:-latest}
       OTEL_AMBIENTE: ${OTEL_AMBIENTE:-produccion}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}

@@ -153,6 +153,31 @@ Si un despliegue falla, el job queda en rojo y la salida del servidor dice en qu
 
 De noche, con el RDS apagado, `/api/health` responde 503. Si eso ya pasaba antes de desplegar, el script solo exige que la versión nueva arranque y responda ese mismo 503, y el job lo marca como aviso, no como error.
 
+## Infraestructura como código (AWS)
+
+Toda la infraestructura de AWS está descrita en dos plantillas de CloudFormation, para poder recrearla desde cero (otra cuenta, otra región o tras un desastre) sin depender de la consola:
+
+| Plantilla | Qué crea |
+|---|---|
+| [`deploy/healthnexus-infra.cfn.yml`](deploy/healthnexus-infra.cfn.yml) | VPC (2 subredes públicas, 2 privadas, sin NAT), grupos de seguridad, EC2 de la API con Docker, Compose, Nginx, swap y el repo clonado, EC2 de la web (opcional), RDS MySQL 8 privado y cifrado, rol del EC2 que solo lee `/healthnexus/<ambiente>/` y apagado nocturno 23:00–07:00 de la web y RDS |
+| [`deploy/github-despliegue.cfn.yml`](deploy/github-despliegue.cfn.yml) | Proveedor OIDC de GitHub, documento de SSM `HealthNexus-DesplegarApi` y el rol que usa el [despliegue automático](#despliegue-automático-a-producción) |
+
+**Validar sin crear nada** (CloudShell, gratis):
+```
+aws cloudformation validate-template --template-body file://healthnexus-infra.cfn.yml
+```
+
+**Recrear todo, en orden:**
+1. Guarda la clave maestra de RDS fuera de la ruta que lee la API: `aws ssm put-parameter --name /healthnexus-infra/prod/RDS_MASTER_PASS --type SecureString --value "$(openssl rand -hex 20)"`.
+2. Crea el stack con `healthnexus-infra.cfn.yml` (parámetros con valores por defecto; tarda ~10 min por RDS). Las salidas dan `IpApi`, `InstanciaApi` y `EndpointRds`.
+3. Carga la base: migraciones y seeders de la web y `database/usuario-api.sql` (usuario propio de la API).
+4. Sube los secretos de la API a `/healthnexus/prod/` con `scripts/subir-secretos-ssm.sh`, con `DB_HOST` = `EndpointRds`.
+5. Apunta el dominio de DuckDNS a `IpApi` y activa HTTPS en el servidor: `sudo dnf install -y certbot python3-certbot-nginx && sudo certbot --nginx -d TU-DOMINIO`.
+6. Crea (o actualiza) el stack de `github-despliegue.cfn.yml` con `InstanciaEc2` = `InstanciaApi`, y pon el mismo id en la variable `EC2_INSTANCE_ID` del environment `produccion` en GitHub.
+7. Primer despliegue: re-ejecuta el workflow **Despliegue** o, en el servidor, `bash scripts/desplegar.sh "$(git rev-parse origin/main)"`.
+
+Notas: la plantilla no se aplica sobre la producción actual (que se creó a mano); describe la misma arquitectura para reconstruirla. RDS tiene protección contra borrado y deja un snapshot si se elimina el stack. Costo aproximado con los valores por defecto: 2 × t3.micro + db.t3.micro + 2 IP fijas, menos el apagado nocturno.
+
 ## Documentación interactiva (Swagger)
 
 - **Swagger UI:** `http://localhost:3000/api/docs` (local) · `https://healthnexus.duckdns.org/api/docs` (producción)

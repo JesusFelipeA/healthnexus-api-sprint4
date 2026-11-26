@@ -36,6 +36,10 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: Revisar los scripts de bash (incluido el de despliegue)
         run: shellcheck scripts/*.sh
+      - name: Revisar las plantillas de AWS (CloudFormation)
+        run: |
+          pipx install --quiet cfn-lint==1.61.0
+          cfn-lint deploy/*.cfn.yml
   imagen:
     needs: pruebas
     runs-on: ubuntu-latest

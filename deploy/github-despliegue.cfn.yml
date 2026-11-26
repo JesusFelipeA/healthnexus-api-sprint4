@@ -1,0 +1,123 @@
+# Lo que necesita AWS para que GitHub Actions despliegue la API (.github/workflows/deploy.yml):
+#   1. El proveedor OIDC de GitHub (si tu cuenta ya lo tiene, pon CrearProveedorOidc = no).
+#   2. El documento de SSM HealthNexus-DesplegarApi: lo ÚNICO que se puede ejecutar. Recibe solo un sha de 40
+#      caracteres y corre scripts/desplegar.sh de ese commit, que además se niega si no está en origin/main.
+#   3. El rol github-deploy-healthnexus-api: solo lo puede asumir el environment "produccion" de tu repo, dura
+#      1 hora y solo puede mandar ese documento a ese EC2.
+# Se sube en la consola: CloudFormation → Create stack → Upload a template file (región us-east-2).
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HealthNexus API - despliegue desde GitHub Actions por OIDC y SSM (sin llaves de AWS en GitHub)
+
+Parameters:
+  InstanciaEc2:
+    Type: AWS::EC2::Instance::Id
+    Description: El EC2 donde corre la API
+  Repositorio:
+    Type: String
+    Default: JesusFelipeA/healthnexus-api-sprint4
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+    Description: Repo de GitHub (dueño/nombre) que puede desplegar
+  Ambiente:
+    Type: String
+    Default: produccion
+    AllowedPattern: '^[a-z0-9-]+$'
+    Description: Environment de GitHub que puede asumir el rol
+  Carpeta:
+    Type: String
+    Default: /home/ec2-user/healthnexus-api-docker
+    AllowedPattern: '^/[A-Za-z0-9/_.-]+$'
+    Description: Carpeta del repo en el EC2
+  Usuario:
+    Type: String
+    Default: ec2-user
+    AllowedPattern: '^[a-z_][a-z0-9_-]*$'
+    Description: Usuario del EC2 dueño de la carpeta (debe estar en el grupo docker)
+  CrearProveedorOidc:
+    Type: String
+    Default: si
+    AllowedValues: [si, 'no']
+    Description: '"no" si en IAM -> Identity providers ya existe token.actions.githubusercontent.com'
+
+Conditions:
+  CrearProveedor: !Equals [!Ref CrearProveedorOidc, si]
+
+Resources:
+  ProveedorGithub:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CrearProveedor
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  DocumentoDespliegue:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: HealthNexus-DesplegarApi
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: Despliega un commit de main de la API de HealthNexus con scripts/desplegar.sh
+        parameters:
+          Sha:
+            type: String
+            description: Commit de main (40 caracteres)
+            allowedPattern: '^[0-9a-f]{40}$'
+        mainSteps:
+          - action: aws:runShellScript
+            name: desplegar
+            inputs:
+              timeoutSeconds: '1200'
+              runCommand:
+                - !Sub >-
+                  runuser -l ${Usuario} -c "cd ${Carpeta} && git fetch -q origin main
+                  && git show {{ Sha }}:scripts/desplegar.sh > /tmp/hn-desplegar.sh
+                  && bash /tmp/hn-desplegar.sh {{ Sha }}"
+
+  RolDespliegue:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-deploy-healthnexus-api
+      Description: GitHub Actions (environment produccion) despliega la API por SSM
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CrearProveedor
+                - !Ref ProveedorGithub
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${Repositorio}:environment:${Ambiente}
+      Policies:
+        - PolicyName: desplegar-api-por-ssm
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SoloEseDocumentoEnEseEc2
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanciaEc2}
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:document/${DocumentoDespliegue}
+              - Sid: VerElResultado
+                Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                  - ssm:DescribeInstanceInformation
+                Resource: '*'
+
+Outputs:
+  RolArn:
+    Description: Valor para la variable AWS_ROLE_ARN del environment produccion en GitHub
+    Value: !GetAtt RolDespliegue.Arn
+  Documento:
+    Description: Documento de SSM que ejecuta el despliegue
+    Value: !Ref DocumentoDespliegue

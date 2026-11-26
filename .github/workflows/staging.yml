@@ -1,0 +1,154 @@
+# Staging temporal: valida la API en un ambiente igual al de producción sin pagar un servidor.
+# En la máquina de GitHub levanta MySQL 8, crea el esquema con las migraciones y datos ficticios de la web
+# (el repo de Laravel es el dueño de las tablas), corre la imagen de producción de la API con los mismos
+# límites que en el EC2, y le pasa la colección de Postman (Newman) y una prueba de carga corta (k6).
+# Al terminar el job todo se borra. No toca AWS ni datos reales.
+#
+# Cuándo corre:
+#   - push a development (un PR aprobado y con merge)          -> HAL-219
+#   - cada PR hacia main: es requisito para poder hacer merge   -> HAL-220
+#   - a mano: Actions -> Staging -> Run workflow
+name: Staging
+on:
+  push:
+    branches: [development]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: staging-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: raiz-staging-temporal
+          MYSQL_DATABASE: healthnexusdb
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -praiz-staging-temporal --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      # Base temporal que solo existe dentro de este job (no es un secreto de ningún ambiente)
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_NAME: healthnexusdb
+      DB_ROOT_PASS: raiz-staging-temporal
+      WEB_REPO: AxelJeronimo2912/HealthNexus
+      WEB_REF: main
+      API: http://127.0.0.1:3000/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bajar la plataforma web (dueña del esquema)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.WEB_REPO }}
+          ref: ${{ env.WEB_REF }}
+          path: web
+          token: ${{ secrets.WEB_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, intl, gd, pdo_mysql
+          coverage: none
+
+      - name: Dependencias de la web
+        working-directory: web
+        run: composer install --no-interaction --prefer-dist --no-scripts --no-progress
+
+      - name: Esquema y datos ficticios (migraciones y seeders de la web)
+        working-directory: web
+        run: |
+          cp .env.example .env
+          sed -i -e "s/^DB_CONNECTION=.*/DB_CONNECTION=mysql/" -e "s/^DB_HOST=.*/DB_HOST=$DB_HOST/" \
+                 -e "s/^DB_PORT=.*/DB_PORT=$DB_PORT/" -e "s/^DB_DATABASE=.*/DB_DATABASE=$DB_NAME/" \
+                 -e "s/^DB_USERNAME=.*/DB_USERNAME=root/" -e "s/^DB_PASSWORD=.*/DB_PASSWORD=$DB_ROOT_PASS/" .env
+          php artisan key:generate --force
+          php artisan migrate --seed --force --no-interaction
+          echo "WEB_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Cambios propios de la API y usuario de MySQL con privilegio mínimo (como en RDS)
+        run: |
+          for f in extra push recuperacion sin-conexion indices_rendimiento; do
+            mysql -h "$DB_HOST" -P "$DB_PORT" -uroot -p"$DB_ROOT_PASS" "$DB_NAME" < "database/$f.sql" > /dev/null
+            echo "aplicado database/$f.sql"
+          done
+          API_DB_PASS=$(openssl rand -hex 24); JWT=$(openssl rand -hex 32)
+          echo "::add-mask::$API_DB_PASS"; echo "::add-mask::$JWT"
+          sed "s/CAMBIAME/$API_DB_PASS/" database/usuario-api.sql | mysql -h "$DB_HOST" -P "$DB_PORT" -uroot -p"$DB_ROOT_PASS"
+          { echo "API_DB_PASS=$API_DB_PASS"; echo "JWT_SECRET=$JWT"; } >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Usuarios de prueba por rol
+        env:
+          DB_USER: root
+          DB_PASS: ${{ env.DB_ROOT_PASS }}
+        run: node scripts/crear-usuarios-qa.js
+
+      - name: Imagen de producción de la API
+        run: docker build --target prod -t "healthnexus-api:staging-${GITHUB_SHA::7}" .
+
+      - name: Levantar la API con los límites del EC2
+        run: |
+          docker run -d --name healthnexus-api-staging --network host \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true --memory 384m \
+            -e PORT=3000 -e DB_HOST -e DB_PORT -e DB_NAME -e DB_USER=hn_api -e DB_PASS="$API_DB_PASS" \
+            -e JWT_SECRET -e CORS_ORIGINS=http://127.0.0.1:3000 -e TRUST_PROXY=1 -e RATE_LIMIT_MAX=100000 -e API_DOCS=0 \
+            "healthnexus-api:staging-${GITHUB_SHA::7}"
+          for _ in $(seq 1 30); do
+            if curl -fsS "$API/health"; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "::error::La API de staging no respondió /api/health"
+          docker logs healthnexus-api-staging
+          exit 1
+
+      - name: Pruebas funcionales (colección de Postman con Newman)
+        run: |
+          mkdir -p reports
+          npx -y -p newman@6 newman run postman/HealthNexus-API.postman_collection.json \
+            -e postman/HealthNexus-local.postman_environment.json --env-var "baseUrl=$API" \
+            --reporters cli,junit --reporter-junit-export reports/newman-staging.xml
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Prueba de carga corta (turno de enfermería, 20 usuarios, 45 s)
+        run: |
+          k6 run -e BASE="$API" -e CORREO=qa.enfermeria@healthnexus.test -e CLAVE='Qa-Hospital-2026!' \
+            -e USUARIOS=20 -e DURACION=45s carga/carga-turno-enfermeria.js
+
+      - name: Log de la API si algo falló
+        if: failure()
+        run: docker logs --tail 100 healthnexus-api-staging || true
+
+      - name: Guardar reportes JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-reportes
+          path: reports/
+          if-no-files-found: warn
+
+      - name: Resumen
+        if: success()
+        run: |
+          {
+            echo "### Staging en verde"
+            echo "- API: ${GITHUB_SHA::7} (imagen de producción, 384 MB, solo lectura)"
+            echo "- Esquema: migraciones y seeders de ${WEB_REPO}@${WEB_SHA}"
+            echo "- Newman: colección completa sin fallas · k6: umbrales cumplidos"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -36,6 +36,7 @@ services:
       # Observabilidad (opcional): vacío = apagada. Con Alloy: http://alloy:4318
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: healthnexus-api
+      OTEL_SERVICE_VERSION: ${TAG:-latest}
       OTEL_AMBIENTE: ${OTEL_AMBIENTE:-produccion}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
@@ -73,7 +74,7 @@ services:
       - /:/host/root:ro,rslave
     # Sin puertos publicados: solo la API le habla, por la red interna de Compose
     read_only: true
-    tmpfs: ["/var/lib/alloy/data", "/tmp"]
+    tmpfs: ["/var/lib/alloy", "/tmp"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 200m

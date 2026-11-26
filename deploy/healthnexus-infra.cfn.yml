@@ -1,0 +1,545 @@
+# Infraestructura de HealthNexus como código (HAL-215): red, servidores, base de datos y apagado nocturno.
+# Describe lo mismo que hoy está hecho a mano en la consola, para poder recrearlo desde cero en otra cuenta o región:
+#   - VPC con 2 subredes públicas (servidores) y 2 privadas (RDS, sin salida a internet).
+#   - EC2 de la API (Amazon Linux 2023) con Docker, Compose, Nginx, 1 GB de swap y el repo clonado en
+#     /home/ec2-user/healthnexus-api-docker, listo para scripts/desplegar.sh. IP fija (Elastic IP).
+#   - EC2 de la web (opcional, la administra el equipo de la web).
+#   - RDS MySQL 8 privado, cifrado, con respaldo diario y snapshot automático si se borra el stack.
+#   - Grupos de seguridad: 80/443 abiertos, 22 solo desde EC2 Instance Connect, 3306 solo desde los servidores.
+#   - Rol del EC2: solo lee /healthnexus/<ambiente>/ de SSM y se deja administrar por SSM (despliegue automático).
+#   - Apagado nocturno opcional (23:00-07:00, hora de México) de la web y la base con EventBridge Scheduler.
+# NO crea secretos ni copia datos: la clave maestra de RDS se lee de SSM (/healthnexus-infra/<Ambiente>/RDS_MASTER_PASS). Ver "Infraestructura como código" en el README para el orden completo.
+# Validar sin crear nada (CloudShell):
+#   aws cloudformation validate-template --template-body file://healthnexus-infra.cfn.yml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HealthNexus - red, EC2 de API y web, RDS MySQL y apagado nocturno (infraestructura reproducible)
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: General }
+        Parameters: [Prefijo, Ambiente]
+      - Label: { default: Red }
+        Parameters: [CidrVpc, CidrInstanceConnect]
+      - Label: { default: Servidores }
+        Parameters: [TipoInstancia, ImagenAmi, RepoApi, CrearWeb]
+      - Label: { default: Base de datos }
+        Parameters: [ClaseRds, VersionMysql, AlmacenamientoGb, UsuarioMaestro]
+      - Label: { default: Costos }
+        Parameters: [ApagadoNocturno]
+
+Parameters:
+  Prefijo:
+    Type: String
+    Default: healthnexus
+    AllowedPattern: '^[a-z][a-z0-9-]{2,20}$'
+    Description: Prefijo de los nombres (minúsculas). Usa otro si ya existe un stack con este prefijo en la cuenta
+  Ambiente:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, qa, prod]
+    Description: Ambiente; el EC2 solo podrá leer los secretos de /healthnexus/<Ambiente>/ en SSM
+  CidrVpc:
+    Type: String
+    Default: 10.20.0.0/16
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/16$'
+    Description: Rango de la VPC (/16). Las subredes usan los /24 .1, .2, .11 y .12
+  CidrInstanceConnect:
+    Type: String
+    Default: 3.16.146.0/29
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: Rango de EC2 Instance Connect de la región (us-east-2 = 3.16.146.0/29). Único origen permitido al puerto 22
+  TipoInstancia:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3a.micro, t3a.small]
+    Description: Tipo de EC2 (t3.micro = 1 GB, el que usa producción hoy)
+  ImagenAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: AMI de Amazon Linux 2023 (se toma la más reciente de AWS)
+  RepoApi:
+    Type: String
+    Default: https://github.com/JesusFelipeA/healthnexus-api-sprint4.git
+    AllowedPattern: '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$'
+    Description: Repo de la API que se clona en el EC2 (rama main)
+  CrearWeb:
+    Type: String
+    Default: si
+    AllowedValues: [si, 'no']
+    Description: Crear también el EC2 de la plataforma web
+  ClaseRds:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t4g.micro, db.t3.small, db.t4g.small]
+    Description: Clase de la instancia RDS
+  VersionMysql:
+    Type: String
+    Default: '8.0'
+    AllowedValues: ['8.0', '8.4']
+    Description: Versión mayor de MySQL (RDS aplica la menor más reciente)
+  AlmacenamientoGb:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: Disco de RDS en GB (gp3)
+  UsuarioMaestro:
+    Type: String
+    Default: admin
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]{3,15}$'
+    Description: Usuario maestro de RDS (la API usa su propio usuario, database/usuario-api.sql)
+  ApagadoNocturno:
+    Type: String
+    Default: si
+    AllowedValues: [si, 'no']
+    Description: Apagar la web y RDS de 23:00 a 07:00 (America/Mexico_City). La API sigue 24/7
+
+Conditions:
+  ConWeb: !Equals [!Ref CrearWeb, si]
+  ConApagado: !Equals [!Ref ApagadoNocturno, si]
+  ConApagadoWeb: !And [!Condition ConWeb, !Condition ConApagado]
+
+Resources:
+  # ---------------------------------------------------------------- Red
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrVpc
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-vpc' }]
+
+  PuertaInternet:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-igw' }]
+
+  UnionPuerta:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref PuertaInternet
+
+  SubredPublicaA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [1, !Cidr [!Ref CidrVpc, 16, 8]]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-publica-a' }]
+
+  SubredPublicaB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [!Ref CidrVpc, 16, 8]]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-publica-b' }]
+
+  SubredPrivadaA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [11, !Cidr [!Ref CidrVpc, 16, 8]]
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-privada-a' }]
+
+  SubredPrivadaB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [12, !Cidr [!Ref CidrVpc, 16, 8]]
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-privada-b' }]
+
+  TablaPublica:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-rutas-publicas' }]
+
+  RutaInternet:
+    Type: AWS::EC2::Route
+    DependsOn: UnionPuerta
+    Properties:
+      RouteTableId: !Ref TablaPublica
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PuertaInternet
+
+  AsociarPublicaA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubredPublicaA, RouteTableId: !Ref TablaPublica }
+
+  AsociarPublicaB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubredPublicaB, RouteTableId: !Ref TablaPublica }
+
+  # Las privadas no tienen ruta a internet (sin NAT: RDS no la necesita y un NAT cuesta ~32 USD/mes)
+  TablaPrivada:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-rutas-privadas' }]
+
+  AsociarPrivadaA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubredPrivadaA, RouteTableId: !Ref TablaPrivada }
+
+  AsociarPrivadaB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubredPrivadaB, RouteTableId: !Ref TablaPrivada }
+
+  # ---------------------------------------------------------------- Grupos de seguridad
+  GrupoApi:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: API HealthNexus - HTTP/HTTPS publico, SSH solo EC2 Instance Connect
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP (Nginx redirige a HTTPS) }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS (Nginx) }
+        - { IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref CidrInstanceConnect, Description: EC2 Instance Connect }
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-sg-api' }]
+
+  GrupoWeb:
+    Type: AWS::EC2::SecurityGroup
+    Condition: ConWeb
+    Properties:
+      GroupDescription: Web HealthNexus - HTTP/HTTPS publico, SSH solo EC2 Instance Connect
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+        - { IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref CidrInstanceConnect, Description: EC2 Instance Connect }
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-sg-web' }]
+
+  GrupoRds:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS HealthNexus - MySQL solo desde los servidores
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-sg-rds' }]
+
+  RdsDesdeApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref GrupoRds
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref GrupoApi
+      Description: MySQL desde la API
+
+  RdsDesdeWeb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: ConWeb
+    Properties:
+      GroupId: !Ref GrupoRds
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref GrupoWeb
+      Description: MySQL desde la web
+
+  # ---------------------------------------------------------------- Permisos de los servidores
+  RolServidor:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Prefijo}-ec2-${Ambiente}'
+      Description: EC2 de HealthNexus - lee sus secretos de SSM y acepta comandos de SSM (despliegue)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: leer-secretos
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SoloSuAmbiente
+                Effect: Allow
+                Action: [ssm:GetParametersByPath, ssm:GetParameters, ssm:GetParameter]
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/healthnexus/${Ambiente}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/healthnexus/${Ambiente}/*
+              - Sid: DescifrarSoloViaSsm
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+  PerfilServidor:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${Prefijo}-ec2-${Ambiente}'
+      Roles: [!Ref RolServidor]
+
+  # ---------------------------------------------------------------- EC2 de la API
+  ServidorApi:
+    Type: AWS::EC2::Instance
+    DependsOn: RutaInternet
+    Properties:
+      ImageId: !Ref ImagenAmi
+      InstanceType: !Ref TipoInstancia
+      IamInstanceProfile: !Ref PerfilServidor
+      SubnetId: !Ref SubredPublicaA
+      SecurityGroupIds: [!Ref GrupoApi]
+      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-api' }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Prepara el servidor de la API. Log: /var/log/healthnexus-preparar.log
+          set -euo pipefail
+          exec > >(tee -a /var/log/healthnexus-preparar.log) 2>&1
+          COMPOSE_VERSION=v2.40.3
+          BUILDX_VERSION=v0.39.1
+          CARPETA=/home/ec2-user/healthnexus-api-docker
+
+          dnf -y -q update
+          dnf -y -q install docker git nginx
+          systemctl enable --now docker nginx
+          usermod -aG docker ec2-user
+
+          # Plugins de Docker (Amazon Linux 2023 no los trae): compose y buildx
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+            "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64"
+          curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-buildx \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          chmod 755 /usr/local/lib/docker/cli-plugins/*
+
+          # 1 GB de swap: con 1 GB de RAM la compilación de la imagen se queda sin memoria
+          if [ ! -f /swapfile ]; then
+            dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+            chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+            echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+          fi
+
+          # Repo de la API en main, como lo espera scripts/desplegar.sh
+          if [ ! -d "$CARPETA/.git" ]; then
+            runuser -l ec2-user -c "git clone -q --branch main ${RepoApi} $CARPETA && git -C $CARPETA config core.fileMode false"
+          fi
+
+          # Nginx: entrada pública; la API escucha solo en 127.0.0.1:3000. HTTPS se agrega con certbot (ver README)
+          cat > /etc/nginx/conf.d/healthnexus-api.conf <<'NGINX'
+          server {
+            listen 80;
+            server_name _;  # el dominio se pone al configurar certbot
+            client_max_body_size 5m;
+            location /api/ {
+              proxy_pass http://127.0.0.1:3000;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+            }
+          }
+          NGINX
+          nginx -t && systemctl reload nginx
+          echo "Servidor de la API (${Ambiente}) listo"
+
+  IpApi:
+    Type: AWS::EC2::EIP
+    DependsOn: UnionPuerta
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref ServidorApi
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-ip-api' }]
+
+  # ---------------------------------------------------------------- EC2 de la web (opcional)
+  ServidorWeb:
+    Type: AWS::EC2::Instance
+    Condition: ConWeb
+    DependsOn: RutaInternet
+    Properties:
+      ImageId: !Ref ImagenAmi
+      InstanceType: !Ref TipoInstancia
+      IamInstanceProfile: !Ref PerfilServidor
+      SubnetId: !Ref SubredPublicaB
+      SecurityGroupIds: [!Ref GrupoWeb]
+      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-web' }]
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          # Base para la plataforma web (Laravel); el equipo de la web instala su aplicación encima
+          set -euo pipefail
+          exec > >(tee -a /var/log/healthnexus-preparar.log) 2>&1
+          dnf -y -q update
+          dnf -y -q install docker git nginx
+          systemctl enable --now docker nginx
+          usermod -aG docker ec2-user
+          echo "Servidor de la web listo"
+
+  IpWeb:
+    Type: AWS::EC2::EIP
+    Condition: ConWeb
+    DependsOn: UnionPuerta
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref ServidorWeb
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-ip-web' }]
+
+  # ---------------------------------------------------------------- Base de datos
+  SubredesRds:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subredes privadas de HealthNexus
+      SubnetIds: [!Ref SubredPrivadaA, !Ref SubredPrivadaB]
+
+  BaseDatos:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${Prefijo}-${Ambiente}-mysql'
+      Engine: mysql
+      EngineVersion: !Ref VersionMysql
+      DBInstanceClass: !Ref ClaseRds
+      AllocatedStorage: !Ref AlmacenamientoGb
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: !Ref UsuarioMaestro
+      # La clave maestra NO pasa por parámetros: se lee cifrada de SSM, fuera de /healthnexus/<Ambiente>/
+      # para que el EC2 (y el .env de la API) nunca la vean. Créala antes del stack (ver README).
+      MasterUserPassword: !Sub '{{resolve:ssm-secure:/healthnexus-infra/${Ambiente}/RDS_MASTER_PASS}}'
+      DBName: healthnexusdb
+      DBSubnetGroupName: !Ref SubredesRds
+      VPCSecurityGroups: [!Ref GrupoRds]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 1
+      PreferredBackupWindow: '07:30-08:00'
+      PreferredMaintenanceWindow: 'sun:08:30-sun:09:00'
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: true
+      CopyTagsToSnapshot: true
+      Tags: [{ Key: Name, Value: !Sub '${Prefijo}-${Ambiente}-mysql' }]
+
+  # ---------------------------------------------------------------- Apagado nocturno (23:00-07:00 México)
+  RolHorario:
+    Type: AWS::IAM::Role
+    Condition: ConApagado
+    Properties:
+      Description: EventBridge Scheduler apaga y prende la web y RDS de HealthNexus
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: apagar-y-prender
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Rds
+                Effect: Allow
+                Action: [rds:StopDBInstance, rds:StartDBInstance]
+                Resource: !Sub arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:${BaseDatos}
+              - !If
+                - ConWeb
+                - Sid: Web
+                  Effect: Allow
+                  Action: [ec2:StopInstances, ec2:StartInstances]
+                  Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ServidorWeb}
+                - !Ref AWS::NoValue
+
+  ApagarRds:
+    Type: AWS::Scheduler::Schedule
+    Condition: ConApagado
+    Properties:
+      Description: Apaga RDS a las 23:00
+      ScheduleExpression: cron(0 23 * * ? *)
+      ScheduleExpressionTimezone: America/Mexico_City
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:rds:stopDBInstance
+        RoleArn: !GetAtt RolHorario.Arn
+        Input: !Sub '{"DbInstanceIdentifier": "${BaseDatos}"}'
+        RetryPolicy: { MaximumRetryAttempts: 2 }
+
+  PrenderRds:
+    Type: AWS::Scheduler::Schedule
+    Condition: ConApagado
+    Properties:
+      Description: Prende RDS a las 06:50 (lista antes de las 07:00)
+      ScheduleExpression: cron(50 6 * * ? *)
+      ScheduleExpressionTimezone: America/Mexico_City
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:rds:startDBInstance
+        RoleArn: !GetAtt RolHorario.Arn
+        Input: !Sub '{"DbInstanceIdentifier": "${BaseDatos}"}'
+        RetryPolicy: { MaximumRetryAttempts: 2 }
+
+  ApagarWeb:
+    Type: AWS::Scheduler::Schedule
+    Condition: ConApagadoWeb
+    Properties:
+      Description: Apaga el EC2 de la web a las 23:00
+      ScheduleExpression: cron(0 23 * * ? *)
+      ScheduleExpressionTimezone: America/Mexico_City
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ec2:stopInstances
+        RoleArn: !GetAtt RolHorario.Arn
+        Input: !Sub '{"InstanceIds": ["${ServidorWeb}"]}'
+        RetryPolicy: { MaximumRetryAttempts: 2 }
+
+  PrenderWeb:
+    Type: AWS::Scheduler::Schedule
+    Condition: ConApagadoWeb
+    Properties:
+      Description: Prende el EC2 de la web a las 07:00
+      ScheduleExpression: cron(0 7 * * ? *)
+      ScheduleExpressionTimezone: America/Mexico_City
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ec2:startInstances
+        RoleArn: !GetAtt RolHorario.Arn
+        Input: !Sub '{"InstanceIds": ["${ServidorWeb}"]}'
+        RetryPolicy: { MaximumRetryAttempts: 2 }
+
+Outputs:
+  VpcId:
+    Description: VPC creada
+    Value: !Ref Vpc
+  IpApi:
+    Description: IP fija de la API (apunta aquí el dominio de DuckDNS)
+    Value: !Ref IpApi
+  InstanciaApi:
+    Description: Valor de InstanciaEc2 del stack github-despliegue y de EC2_INSTANCE_ID en GitHub
+    Value: !Ref ServidorApi
+  IpWeb:
+    Condition: ConWeb
+    Description: IP fija de la web
+    Value: !Ref IpWeb
+  InstanciaWeb:
+    Condition: ConWeb
+    Description: EC2 de la web
+    Value: !Ref ServidorWeb
+  EndpointRds:
+    Description: Valor de DB_HOST en /healthnexus/<Ambiente>/ de SSM
+    Value: !GetAtt BaseDatos.Endpoint.Address
+  RolServidor:
+    Description: Rol de los EC2 (solo lee /healthnexus/<Ambiente>/)
+    Value: !Ref RolServidor

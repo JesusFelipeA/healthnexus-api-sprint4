@@ -77,7 +77,7 @@ La API se reinicia sola al guardar un archivo de `src/`. MySQL queda disponible 
    ```
 4. Despliega: `dc up -d --build` y comprueba `curl https://TU-DOMINIO/api/health`.
 5. Nginx del servidor sigue siendo la entrada HTTPS: `location /api/ { proxy_pass http://127.0.0.1:3000; }` con las cabeceras `X-Forwarded-For` y `X-Forwarded-Proto`. Con Docker `TRUST_PROXY=1` ya viene en la plantilla de producción.
-6. Actualizar: `git pull` y `dc up -d --build`. Para volver a una versión anterior: `TAG=1.0.0 dc up -d`.
+6. Actualizar: `git pull` y `dc up -d --build`. Para volver a una versión anterior: `TAG=1.0.0 dc up -d`. En producción con RDS esto lo hace solo el [despliegue automático](#despliegue-automático-a-producción).
 
 La API recibe solo las variables que necesita (nunca la clave de `root` de MySQL) y corre con el sistema de archivos en solo lectura y sin privilegios extra.
 
@@ -101,6 +101,57 @@ docker compose -f docker-compose.rds.yml --env-file .env.rds run --rm --no-deps 
 2. Al EC2 asígnale un rol de IAM con la política `deploy/iam-healthnexus-ssm.json` (cambia `TU_ID_DE_CUENTA`).
 3. En cada despliegue, en el servidor: `./scripts/env-desde-ssm.sh prod .env.rds` y `docker compose -f docker-compose.rds.yml --env-file .env.rds up -d --build`.
 4. Para rotar un secreto: cámbialo en SSM (paso 1 con el archivo nuevo), repite el paso 3. Cambiar `JWT_SECRET` cierra todas las sesiones.
+
+## Despliegue automático a producción
+
+Cada merge a `main` se despliega solo. No hace falta entrar al EC2.
+
+```
+PR a main ─▶ CI + Staging en verde ─▶ merge ─▶ Despliegue (OIDC + SSM) ─▶ EC2: scripts/desplegar.sh
+                                                                            ├─ /api/health 200 → listo
+                                                                            └─ no responde → regresa a la versión anterior
+```
+
+| Pieza | Archivo | Qué hace |
+|---|---|---|
+| Workflow | `.github/workflows/deploy.yml` | Corre cuando "CI API" termina en verde sobre un push a `main` (o a mano desde Actions). Entra a AWS con OIDC y manda el despliegue por SSM |
+| Permisos en AWS | `deploy/github-despliegue.cfn.yml` | Plantilla de CloudFormation: proveedor OIDC de GitHub, el rol `github-deploy-healthnexus-api` y el documento de SSM `HealthNexus-DesplegarApi` |
+| Script del servidor | `scripts/desplegar.sh` | Actualiza el código, regenera `.env.rds` desde SSM, compila la imagen con el commit como etiqueta, la levanta y revisa `/api/health`. Si no responde en 2 minutos, regresa al commit, a las variables y a la imagen anteriores |
+
+Seguridad:
+- En GitHub no hay llaves de AWS ni secretos de la API: solo `AWS_ROLE_ARN`, `EC2_INSTANCE_ID` y `AWS_REGION`, que no son secretos.
+- El rol solo lo puede asumir el environment `produccion` de este repo, dura 1 hora y solo puede ejecutar el documento `HealthNexus-DesplegarApi` en el EC2 de la API.
+- El documento solo acepta un commit de 40 caracteres, y el script se niega si ese commit no está en `origin/main` o si hay cambios sin commit en el servidor.
+- El EC2 no necesita el puerto 22 abierto para desplegar.
+
+### Staging temporal y condiciones para llegar a producción
+
+No hay servidor de staging: el workflow `.github/workflows/staging.yml` lo arma en la máquina de GitHub cada vez que se necesita y lo borra al terminar.
+
+1. Levanta MySQL 8 y crea las tablas con las migraciones y seeders del repo web (`AxelJeronimo2912/HealthNexus`, rama `main`), que es el dueño del esquema; luego aplica los scripts de `database/` y crea el usuario `hn_api` con privilegio mínimo, igual que en RDS.
+2. Compila la **imagen de producción** de la API y la corre con los límites del EC2 (384 MB, sistema de archivos de solo lectura, sin privilegios).
+3. Corre la colección de Postman completa con Newman y la prueba de carga del turno de enfermería con k6 (20 usuarios, 45 s). Guarda los reportes JUnit como artefacto `staging-reportes`.
+
+Corre en cada push a `development` (un PR aprobado) y en cada PR hacia `main`. Para que un cambio llegue a producción debe cumplir:
+
+| Condición | Dónde se revisa |
+|---|---|
+| Entrar por PR (no se permite push directo a `main` ni a `development`) | Protección de ramas en GitHub |
+| CI en verde: lint, pruebas, auditoría de dependencias, shellcheck e imagen | Checks `pruebas` e `imagen` |
+| Staging en verde: migraciones, colección de Postman y umbrales de k6 | Check `staging` |
+| Opcional: aprobación manual del despliegue | Environment `produccion` con revisores |
+| La versión nueva responde `/api/health` en el EC2 | `scripts/desplegar.sh`; si no, regresa sola a la anterior |
+
+Lint del código: `npm run lint` (ESLint, configuración en `eslint.config.js`).
+
+Desplegar a mano (por ejemplo, para volver a levantar lo mismo después de cambiar un secreto en SSM): **Actions → Despliegue → Run workflow**. Desde el servidor también se puede:
+```
+cd ~/healthnexus-api-docker && git fetch origin main && bash scripts/desplegar.sh "$(git rev-parse origin/main)"
+```
+
+Si un despliegue falla, el job queda en rojo y la salida del servidor dice en qué paso. Si la versión nueva no respondía, la anterior ya está en línea.
+
+De noche, con el RDS apagado, `/api/health` responde 503. Si eso ya pasaba antes de desplegar, el script solo exige que la versión nueva arranque y responda ese mismo 503, y el job lo marca como aviso, no como error.
 
 ## Documentación interactiva (Swagger)
 

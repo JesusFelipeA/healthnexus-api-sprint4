@@ -14,9 +14,9 @@ Parameters:
     Description: El EC2 donde corre la API
   Repositorio:
     Type: String
-    Default: JesusFelipeA/healthnexus-api-sprint4
-    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
-    Description: Repo de GitHub (dueño/nombre) que puede desplegar
+    Default: JesusFelipeA@207296448/healthnexus-api-sprint4@1437751999
+    AllowedPattern: '^[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$'
+    Description: Repo tal como GitHub lo manda en el token (dueño@id/nombre@id; ver CloudTrail -> AssumeRoleWithWebIdentity -> userName)
   Ambiente:
     Type: String
     Default: produccion
